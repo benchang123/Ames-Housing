@@ -5,6 +5,12 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn import linear_model as lm
+from sklearn.model_selection import KFold
+from sklearn.base import clone
+import os
+
+default_path='/Users/bench/Documents/Python Scripts/Ames Housing'
+os.chdir(default_path)
 
 training_data = pd.read_csv("ames_train.csv")
 test_data = pd.read_csv("ames_test.csv")
@@ -43,7 +49,6 @@ def remove_outliers(data, variable, lower=-np.inf, upper=np.inf):
     Note: This function should not change mutate the contents of data.
     """  
     return data.loc[(data[variable] > lower) & (data[variable] < upper), :]
-
 training_data = remove_outliers(training_data, 'Gr_Liv_Area', upper=5000)
 
 #Feature Engineering
@@ -67,6 +72,7 @@ training_data_2=training_data
 training_data_2['TotalBathrooms']=training_data_2['TotalBathrooms']+noise
 sns.scatterplot(data=training_data_2,x='TotalBathrooms',y='SalePrice')
 
+##
 full_data = pd.read_csv("ames_train.csv")
 full_data_len = len(full_data)
 full_data.head()
@@ -100,7 +106,6 @@ X_train, y_train = process_data_gm(train)
 X_val, y_val = process_data_gm(val)
 
 
-
 linear_model = lm.LinearRegression(fit_intercept=True)
 linear_model.fit(X_train,y_train)
 y_fitted = linear_model.predict(X_train)
@@ -126,6 +131,8 @@ ax = sns.regplot(y_val, residuals)
 ax.set_xlabel('Sale Price (Validation Data)')
 ax.set_ylabel('Residuals (Actual Price - Predicted Price)')
 ax.set_title("Residuals vs. Sale Price on Validation Data");
+
+##
 
 training_data = pd.read_csv("ames_train_cleaned.csv")
 
@@ -196,3 +203,105 @@ def ohe_fireplace_qu(data):
     return data
 
 training_data = ohe_fireplace_qu(training_data)
+
+training_data = pd.read_csv("ames_train_cleaned.csv")
+
+def process_data_gm(data):
+    """Process the data for a guided model."""
+    # One-hot-encode fireplace quality feature
+    data = fix_fireplace_qu(data)
+    data = ohe_fireplace_qu(data)
+    
+    # Use rich_neighborhoods computed earlier to add in_rich_neighborhoods feature
+    data = add_in_rich_neighborhood(data, rich_neighborhoods)
+    
+    # Transform Data, Select Features
+    data = select_columns(data, 
+                          'SalePrice', 
+                          'Gr_Liv_Area', 
+                          'Garage_Area',
+                          'TotalBathrooms',
+                          'in_rich_neighborhood',
+                          'Fireplace_Qu=Excellent',
+                          'Fireplace_Qu=Fair',
+                          'Fireplace_Qu=Good',
+                          'Fireplace_Qu=No Fireplace',
+                          'Fireplace_Qu=Poor'
+                         )
+    
+    # Return predictors and response variables separately
+    X = data.drop(['SalePrice'], axis = 1)
+    y = data.loc[:, 'SalePrice']
+    
+    return X, y
+
+X_train_gm, y_train_gm = process_data_gm(training_data)
+X_train_gm.head()
+
+linear_model_gm = lm.LinearRegression(fit_intercept=True)
+
+# Fit the model
+linear_model_gm.fit(X_train_gm, y_train_gm)
+
+# Compute the fitted and predicted values of SalePrice
+y_fitted_gm = linear_model_gm.predict(X_train_gm)
+
+training_error_gm = rmse(y_fitted_gm, y_train_gm)
+print("Training RMSE: {}".format(training_error_gm))
+
+def cross_validate_rmse(model, X, y):
+    model = clone(model)
+    five_fold = KFold(n_splits=5)
+    rmse_values = []
+    for tr_ind, va_ind in five_fold.split(X):
+        model.fit(X.iloc[tr_ind,:], y.iloc[tr_ind])
+        rmse_values.append(rmse(y.iloc[va_ind], model.predict(X.iloc[va_ind,:])))
+    return np.mean(rmse_values)
+
+cv_error_gm = cross_validate_rmse(linear_model_gm,X_train_gm,y_train_gm)
+print("Cross Validation RMSE: {}".format(cv_error_gm))
+
+test_data.drop(test_data[test_data['Garage_Area'].isnull()].index)
+
+final_model = lm.LinearRegression(fit_intercept=True) 
+
+def process_data_fm(data):
+    data = fix_fireplace_qu(data)
+    data = ohe_fireplace_qu(data)
+    data=data.drop(data[data['Garage_Area'].isnull()].index)
+    
+    # Use rich_neighborhoods computed earlier to add in_rich_neighborhoods feature
+    data = add_in_rich_neighborhood(data, rich_neighborhoods)
+    
+    # Transform Data, Select Features
+    data = select_columns(data, 
+                          'SalePrice', 
+                          'Gr_Liv_Area', 
+                          'Garage_Area',
+                          'TotalBathrooms',
+                          'in_rich_neighborhood',
+                          'Fireplace_Qu=Excellent',
+                          'Fireplace_Qu=Fair',
+                          'Fireplace_Qu=Good',
+                          'Fireplace_Qu=No Fireplace',
+                          'Fireplace_Qu=Poor'
+                         )
+    # Return predictors and response variables separately
+    X = data.drop(['SalePrice'], axis = 1)
+    y = data.loc[:, 'SalePrice']
+    return X, y
+
+
+training_data = pd.read_csv('ames_train_cleaned.csv')
+test_data = pd.read_csv('ames_test_cleaned.csv')
+
+X_train, y_train = process_data_fm(training_data)
+X_test, y_test = process_data_fm(test_data)
+
+final_model.fit(X_train, y_train)
+y_predicted_train = final_model.predict(X_train)
+y_predicted_test = final_model.predict(X_test)
+
+training_rmse = rmse(y_predicted_train, y_train)
+test_rmse = rmse(y_predicted_test, y_test)
+(training_rmse,test_rmse)
