@@ -1,4 +1,4 @@
-# Ames Housing Prices [In Progress]
+# Ames Housing Prices
 
 ## Purpose of the Analysis:
 
