@@ -7,17 +7,28 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import cross_validate
 from sklearn import linear_model as lm
 from sklearn import preprocessing
+from sklearn import metrics
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
 
 full_data.shape
 
-#EDA
 
+
+
+#Remove features with lots of NA
 nanmean=training_data.isna().mean()*100
 nan=nanmean[nanmean>25].sort_values(ascending=False)
 print(nan)
+
+training_data.drop(columns=nan.index,inplace=True)
+
+#Number of sold houses per year
+year=training_data.groupby('Yr_Sold').count()['Order'].plot(kind='bar')
+year
+
+#outliers for living area vs price
 
 training_data.columns.values
 
@@ -27,17 +38,52 @@ sns.jointplot(
     data=training_data,
 );
 
+#outliers for basement area vs price
+
+training_data.columns.values
+
+sns.jointplot(
+    x='Total_Bsmt_SF', 
+    y='SalePrice', 
+    data=training_data,
+);
+
+#2 SD for sales price
+
+salepricemean=np.mean(training_data['SalePrice'])
+salepricestd=np.std(training_data['SalePrice'])
+
+print('Mean Sales Price: ', salepricemean)
+print('STD Sales Price: ', salepricestd)
+
+salepricerange=(salepricemean-(2*salepricestd),salepricemean+(2*salepricestd))
+salepricerange
+
+#check outliers
+
 training_data.loc[training_data['Gr_Liv_Area']>5000,['Sale_Condition','SalePrice']]
+
+#check outliers
+
+training_data.loc[training_data['Total_Bsmt_SF']>3000,['Total_Bsmt_SF','SalePrice']]
 
 def remove_outliers(data, variable, upper):
     return data.loc[(data[variable] < upper), :]
 
 training_data = remove_outliers(training_data, 'Gr_Liv_Area', 5000)
 
+training_data = remove_outliers(training_data, 'Total_Bsmt_SF', 3000)
+
+
+#check variable type
 training_data.dtypes.value_counts()
 
+
+#check neighborhood histogram
 training_data.groupby('Neighborhood').size().sort_values(ascending=False).plot(kind='bar')
 
+
+#Check correlation to sales price
 num_cols = training_data.dtypes[(training_data.dtypes == 'int64') | (training_data.dtypes == 'float64')].index
 corr_df = training_data.loc[:,num_cols].corr()
 
@@ -47,15 +93,20 @@ ax = sns.barplot(y=sale_price_corr.keys(),x=sale_price_corr.values)
 plt.xlabel("Correlation")
 plt.ylabel("Feature")
 
+
+#bedroom
 noise = np.random.normal(0,0.5,training_data.shape[0])
 training_data_2=training_data
 training_data_2['Bedroom_AbvGr']=training_data_2['Bedroom_AbvGr']+noise
 sns.scatterplot(data=training_data_2,x='Bedroom_AbvGr',y='SalePrice')
 
+#overall quality
 training_data_2=training_data
 training_data_2['Overall_Qual']=training_data_2['Overall_Qual']+noise
 sns.scatterplot(data=training_data_2,x='Overall_Qual',y='SalePrice')
 
+
+#feature engineering
 def add_total_bathrooms(data):
     """
     Input:
@@ -70,17 +121,21 @@ def add_total_bathrooms(data):
 
 training_data = add_total_bathrooms(training_data)
 
+#check scatter plot
 training_data_2=training_data
 training_data_2['TotalBathrooms']=training_data_2['TotalBathrooms']+noise
 sns.scatterplot(data=training_data_2,x='TotalBathrooms',y='SalePrice')
+
+
 
 def find_rich_neighborhoods(data, n=3, metric=np.mean):
     neighborhoods = data.groupby('Neighborhood').agg(metric).sort_values('SalePrice',ascending=False).iloc[0:n].index.tolist()
     return neighborhoods
 
 richhoods=training_data.groupby('Neighborhood').agg(np.mean).sort_values('SalePrice',ascending=False).iloc[0:20]
-ax = plt.subplots(figsize=(5,8))
+plt.subplots(figsize=(5,8))
 sns.barplot(y=richhoods.index,x=richhoods.SalePrice)
+plt.xticks(rotation=45)
 
 def add_in_rich_neighborhood(data, neighborhoods):
     data['in_rich_neighborhood'] = data['Neighborhood'].isin(neighborhoods).astype('category')
@@ -89,13 +144,18 @@ def add_in_rich_neighborhood(data, neighborhoods):
 rich_neighborhoods = find_rich_neighborhoods(training_data, 4, np.mean)
 training_data = add_in_rich_neighborhood(training_data, rich_neighborhoods)
 
-def ohe_column(data,column):
-    column_ohe=pd.get_dummies(data[column],drop_first=True,prefix=column)
-    data=pd.concat([data, column_ohe], axis=1)
-    return data
 
-training_data=ohe_column(training_data,'Functional')
-training_data=ohe_column(training_data,'Exter_Qual')
+
+categorical = (training_data.dtypes == "object")
+categorical_list = list(categorical[categorical].index)
+print(categorical_list)
+
+def encode():
+    for i in categorical_list:
+        encode=preprocessing.LabelEncoder()
+        training_data[i]=encode.fit_transform(training_data[i])
+encode()
+
 
 train_error_vs_N = []
 cv_error_vs_N = []
@@ -129,6 +189,43 @@ sns.heatmap(training_data[features.index].corr(),annot=True)
 
 colinear=['TotRms_AbvGrd','Garage_Area','Year_Remod/Add','Full_Bath','Garage_Yr_Blt']
 
+
+
+
+# storage vectors
+features=82
+rmse = np.zeros(features-3)
+
+# loop over the Ks
+for i in range(3,features):
+    trainingdata_nosale=training_data.drop(columns=['SalePrice'])
+    trainingx=trainingdata_nosale.iloc[:,2:i]
+    trainingy=training_data[['SalePrice']]
+
+    linear_model=lm.LinearRegression()
+    linear_model.fit(trainingx, trainingy)
+    ypred = linear_model.predict(trainingx)
+
+    rmse[i-1]=metrics.mean_squared_error(ypred, trainingy, squared=False)
+
+#graph
+plt.figure(figsize=(10,5))
+plt.plot(np.arange(1,features),rmse)
+plt.xlabel('Number of Features')
+plt.ylabel('RMSE')
+plt.title('RMSE versus Number of Features')
+plt.show()
+
+
+
+
+
+
+
+
+
+#modeling
+
 def select_columns(data, columns):
     """Select only columns passed as arguments."""
     return data.loc[:, columns]
@@ -136,8 +233,6 @@ def select_columns(data, columns):
 def process_data_fm(data):
     data = remove_outliers(data, 'Gr_Liv_Area', 5000)
     data = add_total_bathrooms(data)
-    data=ohe_column(data,'Functional')
-    data=ohe_column(data,'Exter_Qual')
     
     # Use rich_neighborhoods computed earlier to add in_rich_neighborhoods feature
     data = add_in_rich_neighborhood(data, rich_neighborhoods)
@@ -181,11 +276,8 @@ final_model.fit(X_train, y_train)
 y_predicted_train = final_model.predict(X_train)
 y_predicted_test = final_model.predict(X_test)
 
-def rmse(actual, predicted):
-    return np.sqrt(np.mean((actual-predicted)**2))
-
-training_rmse = rmse(y_predicted_train, y_train)
-test_rmse = rmse(y_predicted_test, y_test)
+training_rmse = metrics.mean_squared_error(y_predicted_train, y_train,squared=False)
+test_rmse = metrics.mean_squared_error(y_predicted_test, y_test,squared=False)
 (round(training_rmse,2),round(test_rmse,2))
 
 ax=sns.scatterplot(y_predicted_train,y_predicted_train-y_train,label="Training")
