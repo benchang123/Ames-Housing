@@ -8,6 +8,8 @@ from sklearn.model_selection import cross_validate
 from sklearn import linear_model as lm
 from sklearn import preprocessing
 from sklearn import metrics
+from sklearn import tree
+from sklearn import ensemble
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
@@ -103,6 +105,7 @@ sns.scatterplot(data=training_data_2,x='Bedroom_AbvGr',y='SalePrice')
 #overall quality
 training_data_2=training_data
 training_data_2['Overall_Qual']=training_data_2['Overall_Qual']+noise
+plt.figure()
 sns.scatterplot(data=training_data_2,x='Overall_Qual',y='SalePrice')
 
 
@@ -156,6 +159,45 @@ def encode():
         training_data[i]=encode.fit_transform(training_data[i])
 encode()
 
+#Feature Importance (Tree)
+
+X=training_data.drop(columns=['SalePrice'])
+Y=training_data['SalePrice']
+
+X=X.fillna(method="pad")
+
+clf = tree.DecisionTreeClassifier()
+clf = clf.fit(X, Y)
+features = X.columns
+importances = clf.feature_importances_
+idx = np.argsort(importances)
+
+plt.figure(figsize=(15,10))
+plt.bar(np.arange(len(idx)),importances[idx])
+plt.xticks(range(len(idx)), [features[i] for i in idx], rotation='vertical')
+
+plt.xlabel('Feature')
+plt.ylabel('Importance')
+plt.title('Importance of Feature')
+
+#Feature Importance (Gradient Boosting)
+
+clf = ensemble.GradientBoostingClassifier()
+clf = tree.DecisionTreeClassifier()
+clf = clf.fit(X, Y)
+features = X.columns
+importances = clf.feature_importances_
+idx = np.argsort(importances)
+
+plt.figure(figsize=(15,10))
+plt.bar(np.arange(len(idx)),importances[idx])
+plt.xticks(range(len(idx)), [features[i] for i in idx], rotation='vertical')
+
+plt.xlabel('Feature')
+plt.ylabel('Importance')
+plt.title('Importance of Feature')
+
+
 
 train_error_vs_N = []
 cv_error_vs_N = []
@@ -192,29 +234,32 @@ colinear=['TotRms_AbvGrd','Garage_Area','Year_Remod/Add','Full_Bath','Garage_Yr_
 
 
 
-# storage vectors
-features=82
-rmse = np.zeros(features-3)
 
-# loop over the Ks
-for i in range(3,features):
-    trainingdata_nosale=training_data.drop(columns=['SalePrice'])
-    trainingx=trainingdata_nosale.iloc[:,2:i]
-    trainingy=training_data[['SalePrice']]
 
-    linear_model=lm.LinearRegression()
-    linear_model.fit(trainingx, trainingy)
-    ypred = linear_model.predict(trainingx)
+# # storage vectors
+# features=82
+# rmse = np.zeros(features-3)
 
-    rmse[i-1]=metrics.mean_squared_error(ypred, trainingy, squared=False)
+# # loop over the Ks
+# trainingdata_nosale=training_data.drop(columns=['SalePrice'])
 
-#graph
-plt.figure(figsize=(10,5))
-plt.plot(np.arange(1,features),rmse)
-plt.xlabel('Number of Features')
-plt.ylabel('RMSE')
-plt.title('RMSE versus Number of Features')
-plt.show()
+# for i in range(3,features):
+#     trainingx=trainingdata_nosale.iloc[:,2:i]
+#     trainingy=training_data[['SalePrice']]
+
+#     linear_model=lm.LinearRegression()
+#     linear_model.fit(trainingx, trainingy)
+#     ypred = linear_model.predict(trainingx)
+
+#     rmse[i-1]=metrics.mean_squared_error(ypred, trainingy, squared=False)
+
+# #graph
+# plt.figure(figsize=(10,5))
+# plt.plot(np.arange(1,features),rmse)
+# plt.xlabel('Number of Features')
+# plt.ylabel('RMSE')
+# plt.title('RMSE versus Number of Features')
+# plt.show()
 
 
 
@@ -259,6 +304,8 @@ def process_data_fm(data):
     y = data.loc[:, 'SalePrice']
     return X, y
 
+
+
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 
 num_features=list(features.drop(colinear).index)
@@ -270,6 +317,11 @@ full_clean.shape
 
 X_train,y_train=process_data_fm(training_data)
 X_test,y_test=process_data_fm(test_data)
+
+
+
+
+
 
 final_model = lm.LinearRegression()
 final_model.fit(X_train, y_train)
