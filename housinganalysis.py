@@ -45,8 +45,6 @@ sns.jointplot(
 
 #outliers for basement area vs price
 
-training_data.columns.values
-
 sns.jointplot(
     x='Total_Bsmt_SF', 
     y='SalePrice', 
@@ -64,9 +62,10 @@ print('STD Sales Price: ', salepricestd)
 salepricerange=(salepricemean-(2*salepricestd),salepricemean+(2*salepricestd))
 salepricerange
 
-#check outliers
-
-training_data.loc[training_data['Gr_Liv_Area']>5000,['Sale_Condition','SalePrice']]
+plt.subplots(figsize=(10,8))
+plt.hist(training_data['SalePrice'])
+plt.xlabel("Sales Price")
+plt.ylabel("Frequency")
 
 #check outliers
 
@@ -336,7 +335,6 @@ def select_columns(data, columns):
     return data.iloc[:, columns]
 
 def process_data_fm(data, overall_features):
-    data = remove_outliers(data, 'Gr_Liv_Area', 5000)
     data = remove_outliers(data, 'Total_Bsmt_SF', 3000)
     data = add_total_bathrooms(data)
     
@@ -354,12 +352,12 @@ def process_data_fm(data, overall_features):
 
 #### OLS ###########
 
-def OLSrun(X_train, y_train, X_test, y_test):
+def OLSrun(X_train_n, y_train, X_test_n, y_test):  
 
     final_model = lm.LinearRegression()
-    final_model.fit(X_train, y_train)
-    y_predicted_train = final_model.predict(X_train)
-    y_predicted_test = final_model.predict(X_test)
+    final_model.fit(X_train_n, y_train)
+    y_predicted_train = final_model.predict(X_train_n)
+    y_predicted_test = final_model.predict(X_test_n)
     
     training_rmse = metrics.mean_squared_error(y_predicted_train, y_train,squared=False)
     test_rmse = metrics.mean_squared_error(y_predicted_test, y_test,squared=False)
@@ -392,11 +390,6 @@ def OLSrun(X_train, y_train, X_test, y_test):
 #standardize
 
 def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
-
-    scaler=preprocessing.StandardScaler()
-    
-    X_train_n = scaler.fit_transform(X_train_n)
-    X_test_n = scaler.fit_transform(X_test_n)
     
     param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
     final_ridge = GridSearchCV(lm.Ridge(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
@@ -443,9 +436,9 @@ def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
 
 ##### LASSO ############
 
-def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
+def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):  
 
-    param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.,500,750,1000]}
+    param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100., 500., 1000.]}
     final_lasso = GridSearchCV(lm.Lasso(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
     final_lasso.fit(X_train_n, y_train_n)
     alpha = final_lasso.best_params_['alpha']
@@ -496,9 +489,14 @@ def runmodels(training_data, test_data, numfeatures, idx):
     results = models.fit()
     print(results.summary())
     
-    OLSrun(X_train, y_train, X_test, y_test)
-    ridgerun(X_train, y_train, X_test, y_test)
-    lassorun(X_train, y_train, X_test, y_test)
+    scaler=preprocessing.StandardScaler()
+    
+    X_train_n = scaler.fit_transform(X_train)
+    X_test_n = scaler.fit_transform(X_test)  
+    
+    OLSrun(X_train_n, y_train, X_test_n, y_test)
+    ridgerun(X_train_n, y_train, X_test_n, y_test)
+    lassorun(X_train_n, y_train, X_test_n, y_test)
     
 ##### Running each model ####
 
