@@ -2,14 +2,17 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import statsmodels.api as sm
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import cross_validate
 from sklearn import linear_model as lm
 from sklearn import preprocessing
 from sklearn import metrics
-from sklearn import tree
 from sklearn import ensemble
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
@@ -17,7 +20,7 @@ training_data, test_data = train_test_split(full_data, random_state=42, test_siz
 full_data.shape
 
 
-
+############ EDA #########################
 
 #Remove features with lots of NA
 nanmean=training_data.isna().mean()*100
@@ -100,6 +103,7 @@ plt.ylabel("Feature")
 noise = np.random.normal(0,0.5,training_data.shape[0])
 training_data_2=training_data
 training_data_2['Bedroom_AbvGr']=training_data_2['Bedroom_AbvGr']+noise
+plt.figure()
 sns.scatterplot(data=training_data_2,x='Bedroom_AbvGr',y='SalePrice')
 
 #overall quality
@@ -153,51 +157,128 @@ categorical = (training_data.dtypes == "object")
 categorical_list = list(categorical[categorical].index)
 print(categorical_list)
 
-def encode():
+def encode(data):
+    categorical = (data.dtypes == "object")
+    categorical_list = list(categorical[categorical].index)
     for i in categorical_list:
         encode=preprocessing.LabelEncoder()
-        training_data[i]=encode.fit_transform(training_data[i])
-encode()
+        data[i]=encode.fit_transform(data[i])
+    return data
+training_data=encode(training_data)
 
-#Feature Importance (Tree)
+#Feature Importance (RF)
 
 X=training_data.drop(columns=['SalePrice'])
 Y=training_data['SalePrice']
 
 X=X.fillna(method="pad")
 
-clf = tree.DecisionTreeClassifier()
+clf = ensemble.RandomForestClassifier()
 clf = clf.fit(X, Y)
 features = X.columns
 importances = clf.feature_importances_
-idx = np.argsort(importances)
+idxrf = np.argsort(importances)[::-1]
 
 plt.figure(figsize=(15,10))
-plt.bar(np.arange(len(idx)),importances[idx])
-plt.xticks(range(len(idx)), [features[i] for i in idx], rotation='vertical')
+plt.bar(np.arange(len(idxrf)),importances[idxrf])
+plt.xticks(range(len(idxrf)), [features[i] for i in idxrf], rotation='vertical')
 
 plt.xlabel('Feature')
 plt.ylabel('Importance')
 plt.title('Importance of Feature')
+
+#number of features based on trees
+
+features=78
+rmse = np.zeros(features-1)
+
+# loop over the Ks
+
+train_error_vs_N = []
+cv_error_vs_N = []
+
+for i in range(1,features):
+    trainingx=X.iloc[:,idxrf[0:i]]
+    trainingy=Y
+
+    linear_model=lm.LinearRegression()
+    
+    cv_results = cross_validate(linear_model, trainingx, trainingy, 
+                                cv=5,scoring=('r2', 'neg_root_mean_squared_error'),
+                                return_train_score=True)
+    
+    train_error_overfit =-np.mean(cv_results['train_neg_root_mean_squared_error'])
+    test_error_overfit=-np.mean(cv_results['test_neg_root_mean_squared_error'])
+    train_error_vs_N.append(train_error_overfit)
+    cv_error_vs_N.append(test_error_overfit)
+
+plt.figure(figsize=(10,7))
+sns.lineplot(np.arange(1,features), train_error_vs_N)
+sns.lineplot(np.arange(1,features), cv_error_vs_N)
+plt.legend(["Training Error", "CV Error"])
+plt.xlabel("Number of Features")
+plt.ylabel("RMSE");
+plt.title('Importance of Feature (Random Forest)')
+
+print(cv_error_vs_N[5:15])
+
+numfeaturesrf=13
 
 #Feature Importance (Gradient Boosting)
 
-clf = ensemble.GradientBoostingClassifier()
-clf = tree.DecisionTreeClassifier()
+clf = ensemble.GradientBoostingClassifier(n_estimators=25,verbose=3)
 clf = clf.fit(X, Y)
 features = X.columns
 importances = clf.feature_importances_
-idx = np.argsort(importances)
+idxgb = np.argsort(importances)[::-1]
 
 plt.figure(figsize=(15,10))
-plt.bar(np.arange(len(idx)),importances[idx])
-plt.xticks(range(len(idx)), [features[i] for i in idx], rotation='vertical')
+plt.bar(np.arange(len(idxgb)),importances[idxgb])
+plt.xticks(range(len(idxgb)), [features[i] for i in idxgb], rotation='vertical')
 
 plt.xlabel('Feature')
 plt.ylabel('Importance')
 plt.title('Importance of Feature')
 
+#number of features based on gb
 
+features=78
+rmse = np.zeros(features-1)
+
+# loop over the Ks
+
+train_error_vs_N = []
+cv_error_vs_N = []
+
+for i in range(1,features):
+    trainingx=X.iloc[:,idxgb[0:i]]
+    trainingy=Y
+
+    linear_model=lm.LinearRegression()
+    
+    cv_results = cross_validate(linear_model, trainingx, trainingy, 
+                                cv=5,scoring=('r2', 'neg_root_mean_squared_error'),
+                                return_train_score=True)
+    
+    train_error_overfit =-np.mean(cv_results['train_neg_root_mean_squared_error'])
+    test_error_overfit=-np.mean(cv_results['test_neg_root_mean_squared_error'])
+    train_error_vs_N.append(train_error_overfit)
+    cv_error_vs_N.append(test_error_overfit)
+
+plt.figure(figsize=(10,7))
+sns.lineplot(np.arange(1,features), train_error_vs_N)
+sns.lineplot(np.arange(1,features), cv_error_vs_N)
+plt.legend(["Training Error", "CV Error"])
+plt.xlabel("Number of Features")
+plt.ylabel("RMSE");
+plt.title('Importance of Feature (Gradient Boosting)')
+
+print(cv_error_vs_N[10:20])
+
+numfeaturesgb=20
+
+
+#number of features based on corr
 
 train_error_vs_N = []
 cv_error_vs_N = []
@@ -206,16 +287,21 @@ range_of_num_features = range(1, sale_price_corr.shape[0] + 1)
 
 for N in range_of_num_features:
     sale_price_corr_first_N_features = sale_price_corr.iloc[:N]
-    saleprice=training_data['SalePrice'].drop(training_data.index[training_data[sale_price_corr.iloc[:N].index].isnull().any(1)])
+    saleprice=training_data['SalePrice'].drop(training_data.index
+                                              [training_data[sale_price_corr.iloc[:N].index]
+                                               .isnull().any(1)])
     indepVar=training_data[sale_price_corr_first_N_features.index].dropna()
     
-    cv_results = cross_validate(linear_model, indepVar, saleprice, cv=4,scoring=('r2', 'neg_root_mean_squared_error'),return_train_score=True)
+    cv_results = cross_validate(linear_model, indepVar, saleprice, cv=4,
+                                scoring=('r2', 'neg_root_mean_squared_error'),
+                                return_train_score=True)
     
     train_error_overfit =-np.mean(cv_results['train_neg_root_mean_squared_error'])
     test_error_overfit=-np.mean(cv_results['test_neg_root_mean_squared_error'])
     train_error_vs_N.append(train_error_overfit)
     cv_error_vs_N.append(test_error_overfit)
-    
+
+plt.figure(figsize=(10,7))
 sns.lineplot(range_of_num_features, train_error_vs_N)
 sns.lineplot(range_of_num_features, cv_error_vs_N)
 plt.legend(["Training Error", "CV Error"])
@@ -224,6 +310,10 @@ plt.ylabel("RMSE");
 
 print(cv_error_vs_N[10:15])
 
+numfeaturescorr=14
+
+#multicorr test
+
 features=sale_price_corr.iloc[:14]
 
 plt.figure(figsize=(10,10))
@@ -231,188 +321,203 @@ sns.heatmap(training_data[features.index].corr(),annot=True)
 
 colinear=['TotRms_AbvGrd','Garage_Area','Year_Remod/Add','Full_Bath','Garage_Yr_Blt']
 
+idxcorr=[]
+
+for i in range(len(features.index.to_list())):
+    idxcorr.append(training_data.columns.get_loc(sale_price_corr.index.to_list()[i]))
+idxcorr.insert(0,76)
+idxcorr=np.array(idxcorr)
 
 
-
-
-
-# # storage vectors
-# features=82
-# rmse = np.zeros(features-3)
-
-# # loop over the Ks
-# trainingdata_nosale=training_data.drop(columns=['SalePrice'])
-
-# for i in range(3,features):
-#     trainingx=trainingdata_nosale.iloc[:,2:i]
-#     trainingy=training_data[['SalePrice']]
-
-#     linear_model=lm.LinearRegression()
-#     linear_model.fit(trainingx, trainingy)
-#     ypred = linear_model.predict(trainingx)
-
-#     rmse[i-1]=metrics.mean_squared_error(ypred, trainingy, squared=False)
-
-# #graph
-# plt.figure(figsize=(10,5))
-# plt.plot(np.arange(1,features),rmse)
-# plt.xlabel('Number of Features')
-# plt.ylabel('RMSE')
-# plt.title('RMSE versus Number of Features')
-# plt.show()
-
-
-
-
-
-
-
-
-
-#modeling
+#### MODELING ##################
 
 def select_columns(data, columns):
     """Select only columns passed as arguments."""
-    return data.loc[:, columns]
+    return data.iloc[:, columns]
 
-def process_data_fm(data):
+def process_data_fm(data, overall_features):
     data = remove_outliers(data, 'Gr_Liv_Area', 5000)
+    data = remove_outliers(data, 'Total_Bsmt_SF', 3000)
     data = add_total_bathrooms(data)
     
-    # Use rich_neighborhoods computed earlier to add in_rich_neighborhoods feature
-    data = add_in_rich_neighborhood(data, rich_neighborhoods)
-    
     # Transform Data, Select Features
-    
-    num_features=list(features.drop(colinear).index)
-    other_features=['SalePrice', 
-                   'TotalBathrooms', 
-                   'in_rich_neighborhood',
-                   'Exter_Qual_Fa', 
-                'Exter_Qual_Gd', 
-                'Exter_Qual_TA',
-                'Functional_Min1',
-                'Functional_Min2',
-                'Functional_Mod',
-                'Functional_Maj2',
-                'Functional_Typ']
-    overall_features=num_features+other_features
-    
+    data = add_in_rich_neighborhood(data, rich_neighborhoods)
     data = select_columns(data, overall_features)
+    data = encode(data)
+        
     # Return predictors and response variables separately
     X = data.drop(['SalePrice'], axis = 1)
     y = data.loc[:, 'SalePrice']
+    X=X.fillna(method="pad")
+    X=X.fillna(method="bfill")
     return X, y
 
+#### OLS ###########
 
+def OLSrun(X_train, y_train, X_test, y_test):
+
+    final_model = lm.LinearRegression()
+    final_model.fit(X_train, y_train)
+    y_predicted_train = final_model.predict(X_train)
+    y_predicted_test = final_model.predict(X_test)
+    
+    training_rmse = metrics.mean_squared_error(y_predicted_train, y_train,squared=False)
+    test_rmse = metrics.mean_squared_error(y_predicted_test, y_test,squared=False)
+    print('Training and Test Error:',round(training_rmse,2),round(test_rmse,2))
+    
+    #Line Plot
+    plt.figure(figsize=(10,7))
+    sns.scatterplot(y_predicted_test,y_test)
+    sns.lineplot([0,600000],[0,600000],color='red')
+    
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('Actual Sales Price')
+    
+    #Residual Plots
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_predicted_train,y_train,label="Training")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Training)')
+    
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_predicted_test,y_test,label="Test")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Test)')
+
+
+##### Ridge ############
+
+#standardize
+
+def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
+
+    scaler=preprocessing.StandardScaler()
+    
+    X_train_n = scaler.fit_transform(X_train_n)
+    X_test_n = scaler.fit_transform(X_test_n)
+    
+    param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
+    final_ridge = GridSearchCV(lm.Ridge(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
+    final_ridge.fit(X_train_n, y_train_n)
+    alpha = final_ridge.best_params_['alpha']
+    print('Initial Best Alpha', alpha)
+    
+    param_gridimp = {'alpha': list(np.linspace(alpha-(alpha*0.2),alpha+(alpha*0.2),200))}
+    final_ridgeimp = GridSearchCV(lm.Ridge(), cv=5, param_grid=param_gridimp, scoring='neg_mean_squared_error')
+    final_ridgeimp.fit(X_train_n, y_train_n)
+    alphaimp = final_ridgeimp.best_params_['alpha']
+    print('Improved Best Alpha', round(alphaimp,2))
+    
+    
+    y_ridge_train = final_ridgeimp.predict(X_train_n)
+    y_ridge_test = final_ridgeimp.predict(X_test_n)
+    
+    training_rmse = metrics.mean_squared_error(y_ridge_train, y_train_n,squared=False)
+    test_rmse = metrics.mean_squared_error(y_ridge_test, y_test_n,squared=False)
+    print('Training and Test Error:',round(training_rmse,2),round(test_rmse,2))
+    
+    
+    #Line Plot
+    plt.figure(figsize=(10,7))
+    sns.scatterplot(y_ridge_test,y_test_n)
+    sns.lineplot([0,600000],[0,600000],color='red')
+    
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('Actual Sales Price')
+    
+    #Residual Plots
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_ridge_train,y_train_n,label="Training")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Training)')
+    
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_ridge_test,y_test_n,label="Test")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Test)')
+
+
+##### LASSO ############
+
+def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
+
+    param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.,500,750,1000]}
+    final_lasso = GridSearchCV(lm.Lasso(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
+    final_lasso.fit(X_train_n, y_train_n)
+    alpha = final_lasso.best_params_['alpha']
+    print('Initial Best Alpha', alpha)
+    
+    param_gridimp = {'alpha': list(np.linspace(alpha-(alpha*0.2),alpha+(alpha*0.2),1000))}
+    final_lassoimp = GridSearchCV(lm.Lasso(), cv=5, param_grid=param_gridimp, scoring='neg_mean_squared_error')
+    final_lassoimp.fit(X_train_n, y_train_n)
+    alphaimp = final_lassoimp.best_params_['alpha']
+    print('Improved Best Alpha', round(alphaimp,2))
+    
+    y_lasso_train = final_lassoimp.predict(X_train_n)
+    y_lasso_test = final_lassoimp.predict(X_test_n)
+    
+    training_rmse = metrics.mean_squared_error(y_lasso_train, y_train_n,squared=False)
+    test_rmse = metrics.mean_squared_error(y_lasso_test, y_test_n,squared=False)
+    print('Training and Test Error:',round(training_rmse,2),round(test_rmse,2))
+    
+    
+    #Line Plot
+    plt.figure(figsize=(10,7))
+    sns.scatterplot(y_lasso_test,y_test_n)
+    sns.lineplot([0,600000],[0,600000],color='red')
+    
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('Actual Sales Price')
+    
+    #Residual Plots
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_lasso_train,y_train_n,label="Training")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Training)')
+    
+    plt.figure(figsize=(10,7))
+    sns.residplot(y_lasso_test,y_test_n,label="Test")
+    plt.xlabel('Predicted Sales Price')
+    plt.ylabel('RMSE')
+    plt.title('Residual Plot (Test)')
+    
+def runmodels(training_data, test_data, numfeatures, idx):
+
+    X_train, y_train=process_data_fm(training_data,idx[0:numfeatures])
+    X_test, y_test=process_data_fm(test_data,idx[0:numfeatures])
+    
+    X_train_r2 = sm.add_constant(X_train)
+    models = sm.OLS(y_train,X_train_r2)
+    results = models.fit()
+    print(results.summary())
+    
+    OLSrun(X_train, y_train, X_test, y_test)
+    ridgerun(X_train, y_train, X_test, y_test)
+    lassorun(X_train, y_train, X_test, y_test)
+    
+##### Running each model ####
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 
-num_features=list(features.drop(colinear).index)
-full_clean=full_data.drop(full_data.index[full_data[num_features].isnull().any(1)])
+#drop too many nan
+nan=nanmean[nanmean>25].sort_values(ascending=False)
+full_data.drop(columns=nan.index,inplace=True)
 
-training_data, test_data = train_test_split(full_clean, random_state=42, test_size=0.2)
+training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
 
-full_clean.shape
+training_data.shape
 
-X_train,y_train=process_data_fm(training_data)
-X_test,y_test=process_data_fm(test_data)
+#RF
 
+runmodels(training_data, test_data, numfeaturesrf, idxrf)
 
+#GB
+runmodels(training_data, test_data, numfeaturesgb, idxgb)
 
-
-
-
-final_model = lm.LinearRegression()
-final_model.fit(X_train, y_train)
-y_predicted_train = final_model.predict(X_train)
-y_predicted_test = final_model.predict(X_test)
-
-training_rmse = metrics.mean_squared_error(y_predicted_train, y_train,squared=False)
-test_rmse = metrics.mean_squared_error(y_predicted_test, y_test,squared=False)
-(round(training_rmse,2),round(test_rmse,2))
-
-ax=sns.scatterplot(y_predicted_train,y_predicted_train-y_train,label="Training")
-ax=sns.scatterplot(y_predicted_test,y_predicted_test-y_test,label="Test")
-sns.lineplot([0,600000],0,color='red')
-
-plt.legend(labels=['Training', 'Test'])
-leg = ax.legend()
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('RMSE')
-
-sns.scatterplot(y_predicted_test,y_test)
-sns.lineplot([0,600000],[0,600000],color='red')
-
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('Actual Sales Price')
-
-X_train_n,y_train_n=process_data_fm(training_data)
-X_test_n,y_test_n=process_data_fm(test_data)
-
-X_train_n = preprocessing.scale(X_train_n)
-X_test_n = preprocessing.scale(X_test_n)
-
-y_train_n=(y_train-np.mean(y_train))/np.std(y_train)
-y_test_n=(y_test-np.mean(y_test))/np.std(y_test)
-
-param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
-final_ridge = GridSearchCV(lm.Ridge(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
-final_ridge.fit(X_train_n, y_train_n)
-alpha = final_ridge.best_params_['alpha']
-alpha
-
-param_gridimp = {'alpha': list(np.linspace(1,10,200))}
-final_ridgeimp = GridSearchCV(lm.Ridge(), cv=5, param_grid=param_gridimp, scoring='neg_mean_squared_error')
-final_ridgeimp.fit(X_train_n, y_train_n)
-alphaimp = final_ridgeimp.best_params_['alpha']
-round(alphaimp,2)
-
-y_ridge_train = final_ridgeimp.predict(X_train_n)
-y_ridge_test = final_ridgeimp.predict(X_test_n)
-
-ax=sns.scatterplot(y_ridge_train,y_ridge_train-y_train_n,label="Training")
-ax=sns.scatterplot(y_ridge_test,y_ridge_test-y_test_n,label="Test")
-sns.lineplot([-2,6],0,color='red')
-
-plt.legend(labels=['Training', 'Test'])
-leg = ax.legend()
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('RMSE')
-
-sns.scatterplot(y_ridge_test,y_test_n)
-sns.lineplot([-2,5],[-2,5],color='red')
-
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('Actual Sales Price')
-
-param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
-final_lasso = GridSearchCV(lm.Lasso(), cv=5, param_grid=param_grid, scoring='neg_mean_squared_error')
-final_lasso.fit(X_train_n, y_train_n)
-alpha = final_lasso.best_params_['alpha']
-round(alpha,2)
-
-param_gridimp = {'alpha': list(np.linspace(0.005,0.1,100))}
-final_lassoimp = GridSearchCV(lm.Lasso(), cv=5, param_grid=param_gridimp, scoring='neg_mean_squared_error')
-final_lassoimp.fit(X_train_n, y_train_n)
-alphaimp = final_lassoimp.best_params_['alpha']
-round(alphaimp,2)
-
-final_lassoimp.fit(X_train_n, y_train_n)
-y_lasso_train = final_lassoimp.predict(X_train_n)
-y_lasso_test = final_lassoimp.predict(X_test_n)
-
-sns.lineplot([-2,6],0,color='red')
-ax=sns.scatterplot(y_ridge_train,y_ridge_train-y_train_n,label="Training")
-ax=sns.scatterplot(y_ridge_test,y_ridge_test-y_test_n,label="Test")
-
-plt.legend(labels=['Training', 'Test'])
-leg = ax.legend()
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('RMSE')
-
-sns.scatterplot(y_ridge_test,y_test_n)
-sns.lineplot([-2,5],[-2,5],color='red')
-
-plt.xlabel('Predicted Sales Price')
-plt.ylabel('Actual Sales Price')
+#corr
+runmodels(training_data, test_data, numfeaturescorr, idxcorr)
