@@ -43,14 +43,6 @@ sns.jointplot(
     data=training_data,
 );
 
-#outliers for basement area vs price
-
-sns.jointplot(
-    x='Total_Bsmt_SF', 
-    y='SalePrice', 
-    data=training_data,
-);
-
 #2 SD for sales price
 
 salepricemean=np.mean(training_data['SalePrice'])
@@ -74,9 +66,7 @@ training_data.loc[training_data['Total_Bsmt_SF']>3000,['Total_Bsmt_SF','SalePric
 def remove_outliers(data, variable, upper):
     return data.loc[(data[variable] < upper), :]
 
-training_data = remove_outliers(training_data, 'Gr_Liv_Area', 5000)
-
-training_data = remove_outliers(training_data, 'Total_Bsmt_SF', 3000)
+training_data = remove_outliers(training_data, 'Gr_Liv_Area', 4000)
 
 
 #check variable type
@@ -335,7 +325,7 @@ def select_columns(data, columns):
     return data.iloc[:, columns]
 
 def process_data_fm(data, overall_features):
-    data = remove_outliers(data, 'Total_Bsmt_SF', 3000)
+    data = remove_outliers(data, 'Gr_Liv_Area', 4000)
     data = add_total_bathrooms(data)
     
     # Transform Data, Select Features
@@ -387,8 +377,6 @@ def OLSrun(X_train_n, y_train, X_test_n, y_test):
 
 ##### Ridge ############
 
-#standardize
-
 def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
     
     param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
@@ -432,6 +420,19 @@ def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('RMSE')
     plt.title('Residual Plot (Test)')
+    
+    #Feature Importance
+    ridge=final_ridgeimp.best_estimator_
+    
+    coefs = pd.DataFrame({'coefs':ridge.coef_}, index=X_train_n.columns)
+    coefs['coefs_abs'] = np.abs(coefs.coefs)
+    
+    top_coefs = coefs.sort_values('coefs_abs', ascending=False).head(10)
+    plt.figure(figsize=(8,10))
+    sns.barplot( top_coefs.coefs_abs, top_coefs.index)
+    plt.title('Ridge Regression: Top Features')
+    plt.xlabel('Absolute Coefficient')
+    plt.show()
 
 
 ##### LASSO ############
@@ -479,6 +480,19 @@ def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
     plt.ylabel('RMSE')
     plt.title('Residual Plot (Test)')
     
+    #Feature Importance
+    lasso=final_lassoimp.best_estimator_
+    
+    coefs = pd.DataFrame({'coefs':lasso.coef_}, index=X_train_n.columns)
+    coefs['coefs_abs'] = np.abs(coefs.coefs)
+    
+    top_coefs = coefs.sort_values('coefs_abs', ascending=False).head(10)
+    plt.figure(figsize=(8,10))
+    sns.barplot( top_coefs.coefs_abs, top_coefs.index)
+    plt.title('LASSO Regression: Top Features')
+    plt.xlabel('Absolute Coefficient')
+    plt.show()
+    
 def runmodels(training_data, test_data, numfeatures, idx):
 
     X_train, y_train=process_data_fm(training_data,idx[0:numfeatures])
@@ -491,14 +505,14 @@ def runmodels(training_data, test_data, numfeatures, idx):
     
     scaler=preprocessing.StandardScaler()
     
-    X_train_n = scaler.fit_transform(X_train)
-    X_test_n = scaler.fit_transform(X_test)  
+    X_train_n = pd.DataFrame(scaler.fit_transform(X_train),columns = X_train.columns)
+    X_test_n = pd.DataFrame(scaler.fit_transform(X_test),columns = X_test.columns)
     
     OLSrun(X_train_n, y_train, X_test_n, y_test)
     ridgerun(X_train_n, y_train, X_test_n, y_test)
     lassorun(X_train_n, y_train, X_test_n, y_test)
     
-##### Running each model ####
+##### Running each model ########
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 
@@ -511,7 +525,6 @@ training_data, test_data = train_test_split(full_data, random_state=42, test_siz
 training_data.shape
 
 #RF
-
 runmodels(training_data, test_data, numfeaturesrf, idxrf)
 
 #GB
