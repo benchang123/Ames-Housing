@@ -61,7 +61,7 @@ plt.ylabel("Frequency")
 
 #check outliers
 
-training_data.loc[training_data['Total_Bsmt_SF']>3000,['Total_Bsmt_SF','SalePrice']]
+training_data.loc[training_data['Gr_Liv_Area']>4000,['Gr_Liv_Area','SalePrice']]
 
 def remove_outliers(data, variable, upper):
     return data.loc[(data[variable] < upper), :]
