@@ -530,5 +530,7 @@ runmodels(training_data, test_data, numfeaturesrf, idxrf)
 #GB
 runmodels(training_data, test_data, numfeaturesgb, idxgb)
 
+runmodels(training_data, test_data, 40, idxgb)
+
 #corr
 runmodels(training_data, test_data, numfeaturescorr, idxcorr)
