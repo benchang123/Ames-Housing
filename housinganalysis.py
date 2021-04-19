@@ -160,6 +160,10 @@ training_data=encode(training_data)
 X=training_data.drop(columns=['SalePrice'])
 Y=training_data['SalePrice']
 
+for i in range(len(num_cols)-1):
+    meanvar=np.nanmean(X[num_cols[i]])
+    X[num_cols[i]].fillna(meanvar,inplace=True)
+
 X=X.fillna(method="pad")
 
 clf = ensemble.RandomForestClassifier()
