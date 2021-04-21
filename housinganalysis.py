@@ -13,6 +13,8 @@ from sklearn import ensemble
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
@@ -123,6 +125,12 @@ training_data_2['TotalBathrooms']=training_data_2['TotalBathrooms']+noise
 sns.scatterplot(data=training_data_2,x='TotalBathrooms',y='SalePrice')
 
 
+def add_total_SF(data):
+    totalSFdf = data.copy()
+    totalSFdf['Total_SF'] = totalSFdf.Total_Bsmt_SF + totalSFdf.Gr_Liv_Area
+    return totalSFdf
+
+training_data = add_total_SF(training_data)
 
 def find_rich_neighborhoods(data, n=3, metric=np.mean):
     neighborhoods = data.groupby('Neighborhood').agg(metric).sort_values('SalePrice',ascending=False).iloc[0:n].index.tolist()
@@ -134,12 +142,11 @@ sns.barplot(y=richhoods.index,x=richhoods.SalePrice)
 plt.xticks(rotation=45)
 
 def add_in_rich_neighborhood(data, neighborhoods):
-    data['in_rich_neighborhood'] = data['Neighborhood'].isin(neighborhoods).astype('category')
+    data['in_rich_neighborhood'] = data['Neighborhood'].isin(neighborhoods).astype(int)
     return data
 
 rich_neighborhoods = find_rich_neighborhoods(training_data, 4, np.mean)
 training_data = add_in_rich_neighborhood(training_data, rich_neighborhoods)
-
 
 
 categorical = (training_data.dtypes == "object")
@@ -182,7 +189,7 @@ plt.title('Importance of Feature')
 
 #number of features based on trees
 
-features=78
+features=79
 rmse = np.zeros(features-1)
 
 # loop over the Ks
@@ -235,7 +242,7 @@ plt.title('Importance of Feature')
 
 #number of features based on gb
 
-features=78
+features=79
 rmse = np.zeros(features-1)
 
 # loop over the Ks
@@ -276,6 +283,11 @@ numfeaturesgb=20
 train_error_vs_N = []
 cv_error_vs_N = []
 linear_model=lm.LinearRegression()
+
+num_cols = training_data.dtypes[(training_data.dtypes == 'int64') | (training_data.dtypes == 'float64')].index
+corr_df = training_data.loc[:,num_cols].corr()
+sale_price_corr = corr_df['SalePrice'].drop('SalePrice',axis=0).sort_values(ascending=False)
+
 range_of_num_features = range(1, sale_price_corr.shape[0] + 1)
 
 for N in range_of_num_features:
@@ -284,6 +296,9 @@ for N in range_of_num_features:
                                               [training_data[sale_price_corr.iloc[:N].index]
                                                .isnull().any(1)])
     indepVar=training_data[sale_price_corr_first_N_features.index].dropna()
+    
+    scaler=preprocessing.StandardScaler()
+    indepVar = pd.DataFrame(scaler.fit_transform(indepVar),columns = indepVar.columns)
     
     cv_results = cross_validate(linear_model, indepVar, saleprice, cv=4,
                                 scoring=('r2', 'neg_root_mean_squared_error'),
@@ -301,13 +316,13 @@ plt.legend(["Training Error", "CV Error"])
 plt.xlabel("Number of Features")
 plt.ylabel("RMSE");
 
-print(cv_error_vs_N[10:15])
+print(cv_error_vs_N[10:20])
 
-numfeaturescorr=14
+numfeaturescorr=16
 
 #multicorr test
 
-features=sale_price_corr.iloc[:14]
+features=sale_price_corr.iloc[:numfeaturescorr]
 
 plt.figure(figsize=(10,10))
 sns.heatmap(training_data[features.index].corr(),annot=True)
@@ -335,10 +350,15 @@ def process_data_fm(data, overall_features):
     # Transform Data, Select Features
     data = add_in_rich_neighborhood(data, rich_neighborhoods)
     data = select_columns(data, overall_features)
-    data = encode(data)
         
     # Return predictors and response variables separately
     X = data.drop(['SalePrice'], axis = 1)
+    
+    numf=X.dtypes[(X.dtypes == 'int64') | (X.dtypes == 'float64')].index
+    scaler=preprocessing.StandardScaler()
+    X.loc[:,numf] = scaler.fit_transform(X.loc[:,numf])
+    X = encode(X)
+    
     y = data.loc[:, 'SalePrice']
     X=X.fillna(method="pad")
     X=X.fillna(method="bfill")
@@ -498,7 +518,9 @@ def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
     plt.show()
     
 def runmodels(training_data, test_data, numfeatures, idx):
-
+    training_data = add_total_SF(training_data)
+    test_data = add_total_SF(test_data)
+    
     X_train, y_train=process_data_fm(training_data,idx[0:numfeatures])
     X_test, y_test=process_data_fm(test_data,idx[0:numfeatures])
     
@@ -507,10 +529,8 @@ def runmodels(training_data, test_data, numfeatures, idx):
     results = models.fit()
     print(results.summary())
     
-    scaler=preprocessing.StandardScaler()
-    
-    X_train_n = pd.DataFrame(scaler.fit_transform(X_train),columns = X_train.columns)
-    X_test_n = pd.DataFrame(scaler.fit_transform(X_test),columns = X_test.columns)
+    X_train_n = X_train
+    X_test_n = X_test
     
     OLSrun(X_train_n, y_train, X_test_n, y_test)
     ridgerun(X_train_n, y_train, X_test_n, y_test)
