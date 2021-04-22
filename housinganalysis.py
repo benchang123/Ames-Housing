@@ -379,24 +379,24 @@ def OLSrun(X_train_n, y_train, X_test_n, y_test):
     
     #Line Plot
     plt.figure(figsize=(10,7))
-    sns.scatterplot(y_predicted_test,y_test)
+    ax=sns.scatterplot(y_predicted_train,y_train,label="Training")
+    sns.scatterplot(y_predicted_test,y_test,label="Test",ax=ax)
     sns.lineplot([0,600000],[0,600000],color='red')
     
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('Actual Sales Price')
+    ax.legend(loc='upper left')
+    plt.show()
     
     #Residual Plots
     plt.figure(figsize=(10,7))
-    sns.residplot(y_predicted_train,y_train,label="Training")
+    ax=sns.residplot(y_predicted_train,y_train,label="Training")
+    sns.residplot(y_predicted_test,y_test,label="Test",ax=ax)
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('RMSE')
-    plt.title('Residual Plot (Training)')
-    
-    plt.figure(figsize=(10,7))
-    sns.residplot(y_predicted_test,y_test,label="Test")
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot (Test)')
+    plt.title('Residual Plot')
+    ax.legend(loc='upper left')
+    plt.show()
 
 
 ##### Ridge ############
@@ -426,24 +426,25 @@ def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
     
     #Line Plot
     plt.figure(figsize=(10,7))
-    sns.scatterplot(y_ridge_test,y_test_n)
+    
+    ax=sns.scatterplot(y_ridge_train,y_train_n,label="Training")
+    sns.scatterplot(y_ridge_test,y_test_n,label="Test",ax=ax)
     sns.lineplot([0,600000],[0,600000],color='red')
     
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('Actual Sales Price')
+    ax.legend(loc='upper left')
+    plt.show()
     
     #Residual Plots
     plt.figure(figsize=(10,7))
-    sns.residplot(y_ridge_train,y_train_n,label="Training")
+    ax=sns.residplot(y_ridge_train,y_train_n,label="Training")
+    sns.residplot(y_ridge_test,y_test_n,label="Test",ax=ax)
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('RMSE')
-    plt.title('Residual Plot (Training)')
-    
-    plt.figure(figsize=(10,7))
-    sns.residplot(y_ridge_test,y_test_n,label="Test")
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot (Test)')
+    plt.title('Residual Plot')
+    ax.legend(loc='upper left')
+    plt.show()
     
     #Feature Importance
     ridge=final_ridgeimp.best_estimator_
@@ -485,24 +486,26 @@ def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
     
     #Line Plot
     plt.figure(figsize=(10,7))
-    sns.scatterplot(y_lasso_test,y_test_n)
+
+    ax=sns.scatterplot(y_lasso_train,y_train_n,label="Training")
+    sns.scatterplot(y_lasso_test,y_test_n,label="Test",ax=ax)
     sns.lineplot([0,600000],[0,600000],color='red')
     
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('Actual Sales Price')
+    ax.legend(loc='upper left')
+    plt.show()
+    
     
     #Residual Plots
     plt.figure(figsize=(10,7))
-    sns.residplot(y_lasso_train,y_train_n,label="Training")
+    ax=sns.residplot(y_lasso_train,y_train_n,label="Training")
+    sns.residplot(y_lasso_test,y_test_n,label="Test",ax=ax)
     plt.xlabel('Predicted Sales Price')
     plt.ylabel('RMSE')
-    plt.title('Residual Plot (Training)')
-    
-    plt.figure(figsize=(10,7))
-    sns.residplot(y_lasso_test,y_test_n,label="Test")
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot (Test)')
+    plt.title('Residual Plot')
+    ax.legend(loc='upper left')
+    plt.show()
     
     #Feature Importance
     lasso=final_lassoimp.best_estimator_
@@ -554,7 +557,7 @@ runmodels(training_data, test_data, numfeaturesrf, idxrf)
 #GB
 runmodels(training_data, test_data, numfeaturesgb, idxgb)
 
-runmodels(training_data, test_data, 40, idxgb)
+#runmodels(training_data, test_data, 40, idxgb)
 
 #corr
 runmodels(training_data, test_data, numfeaturescorr, idxcorr)
