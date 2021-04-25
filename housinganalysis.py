@@ -191,7 +191,7 @@ importances = clf.feature_importances_
 idxrf = np.argsort(importances)[::-1]
 
 plt.figure(figsize=(15,10))
-plt.bar(np.arange(len(idxrf)),importances[idxrf])
+sns.barplot(x=np.arange(len(idxrf)),y=importances[idxrf], color = 'black')
 plt.xticks(range(len(idxrf)), [features[i] for i in idxrf], rotation='vertical')
 
 plt.xlabel('Feature')
@@ -244,7 +244,7 @@ importances = clf.feature_importances_
 idxgb = np.argsort(importances)[::-1]
 
 plt.figure(figsize=(15,10))
-plt.bar(np.arange(len(idxgb)),importances[idxgb])
+sns.barplot(x=np.arange(len(idxgb)),y=importances[idxgb], color = 'black')
 plt.xticks(range(len(idxgb)), [features[i] for i in idxgb], rotation='vertical')
 
 plt.xlabel('Feature')
