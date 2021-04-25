@@ -128,6 +128,7 @@ training_data = add_total_bathrooms(training_data)
 #check scatter plot
 training_data_2=training_data
 training_data_2['TotalBathrooms']=training_data_2['TotalBathrooms']+noise
+plt.figure(figsize=(10,8))
 sns.scatterplot(data=training_data_2,x='TotalBathrooms',y='SalePrice')
 
 
@@ -329,7 +330,7 @@ plt.ylabel("RMSE");
 
 print(cv_error_vs_N[10:20])
 
-numfeaturescorr=16
+numfeaturescorr=20
 
 #multicorr test
 
