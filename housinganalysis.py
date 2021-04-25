@@ -56,8 +56,8 @@ print('STD Sales Price: ', salepricestd)
 salepricerange=(salepricemean-(2*salepricestd),salepricemean+(2*salepricestd))
 salepricerange
 
-plt.subplots(figsize=(10,8))
-plt.hist(training_data['SalePrice'])
+plt.figure(figsize=(10,5))
+sns.histplot(training_data, x='SalePrice')
 plt.xlabel("Sales Price")
 plt.ylabel("Frequency")
 
@@ -104,6 +104,12 @@ plt.figure()
 sns.scatterplot(data=training_data_2,x='Overall_Qual',y='SalePrice')
 
 
+plt.figure(figsize=(10,5))
+sns.histplot(training_data, x='Year_Built')
+plt.xlabel('Year Built')
+plt.ylabel("Frequency")
+
+
 #feature engineering
 def add_total_bathrooms(data):
     """
@@ -131,6 +137,11 @@ def add_total_SF(data):
     return totalSFdf
 
 training_data = add_total_SF(training_data)
+
+plt.figure(figsize=(10,5))
+sns.histplot(training_data, x='Total_SF')
+plt.xlabel('Total Square Feet')
+plt.ylabel("Frequency")
 
 def find_rich_neighborhoods(data, n=3, metric=np.mean):
     neighborhoods = data.groupby('Neighborhood').agg(metric).sort_values('SalePrice',ascending=False).iloc[0:n].index.tolist()
@@ -557,7 +568,7 @@ runmodels(training_data, test_data, numfeaturesrf, idxrf)
 #GB
 runmodels(training_data, test_data, numfeaturesgb, idxgb)
 
-#runmodels(training_data, test_data, 40, idxgb)
+runmodels(training_data, test_data, 40, idxgb)
 
 #corr
 runmodels(training_data, test_data, numfeaturescorr, idxcorr)
