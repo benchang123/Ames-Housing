@@ -10,11 +10,12 @@ from sklearn import linear_model as lm
 from sklearn import preprocessing
 from sklearn import metrics
 from sklearn import ensemble
-
+from sklearn.exceptions import ConvergenceWarning
 import warnings
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
+    warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 full_data = pd.read_csv('https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv')
 training_data, test_data = train_test_split(full_data, random_state=42, test_size=0.2)
