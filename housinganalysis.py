@@ -1,660 +1,835 @@
+"""
+Ames Housing Price Analysis
+
+A comprehensive analysis of the Ames Housing dataset using multiple regression
+techniques to predict housing prices and identify key price-driving features.
+"""
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import cross_validate
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_validate
 from sklearn import linear_model as lm
 from sklearn import preprocessing
 from sklearn import metrics
-from sklearn import ensemble
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.exceptions import ConvergenceWarning
+from typing import Tuple, List, Optional, Dict, Any
+from pathlib import Path
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=ConvergenceWarning)
-
-full_data = pd.read_csv(
-    'https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv'
-)
-training_data, test_data = train_test_split(
-    full_data, random_state=42, test_size=0.2)
-
-full_data.shape
-
-############ EDA #########################
-
-#Remove features with lots of NA
-nanmean = training_data.isna().mean() * 100
-nan = nanmean[nanmean > 25].sort_values(ascending=False)
-print(nan)
-
-training_data.drop(columns=nan.index, inplace=True)
-
-#Number of sold houses per year
-year = training_data.groupby('Yr_Sold').count()['Order'].plot(kind='bar')
-year
-
-#outliers for living area vs price
-
-training_data.columns.values
-
-sns.jointplot(
-    x='Gr_Liv_Area',
-    y='SalePrice',
-    data=training_data,
-)
-
-#2 SD for sales price
-
-salepricemean = np.mean(training_data['SalePrice'])
-salepricestd = np.std(training_data['SalePrice'])
-
-print('Mean Sales Price: ', salepricemean)
-print('STD Sales Price: ', salepricestd)
-
-salepricerange = (
-    salepricemean - (2 * salepricestd), salepricemean + (2 * salepricestd))
-salepricerange
-
-plt.figure(figsize=(10, 5))
-sns.histplot(training_data, x='SalePrice')
-plt.xlabel("Sales Price")
-plt.ylabel("Frequency")
-
-#check outliers
-
-training_data.loc[training_data['Gr_Liv_Area'] > 4000,
-                  ['Gr_Liv_Area', 'SalePrice']]
-
-
-def remove_outliers(data, variable, upper):
-    return data.loc[(data[variable] < upper), :]
-
-
-training_data = remove_outliers(training_data, 'Gr_Liv_Area', 4000)
-
-#check variable type
-training_data.dtypes.value_counts()
-
-#check neighborhood histogram
-training_data.groupby('Neighborhood').size().sort_values(ascending=False).plot(
-    kind='bar')
-
-#Check correlation to sales price
-num_cols = training_data.dtypes[(training_data.dtypes == 'int64') |
-                                (training_data.dtypes == 'float64')].index
-corr_df = training_data.loc[:, num_cols].corr()
-
-sale_price_corr = corr_df['SalePrice'].drop(
-    'SalePrice', axis=0).sort_values(ascending=False)
-ax = plt.subplots(figsize=(10, 15))
-ax = sns.barplot(y=sale_price_corr.keys(), x=sale_price_corr.values)
-plt.xlabel("Correlation")
-plt.ylabel("Feature")
-
-#bedroom
-noise = np.random.normal(0, 0.5, training_data.shape[0])
-training_data_2 = training_data
-training_data_2['Bedroom_AbvGr'] = training_data_2['Bedroom_AbvGr'] + noise
-plt.figure()
-sns.scatterplot(data=training_data_2, x='Bedroom_AbvGr', y='SalePrice')
-
-#overall quality
-training_data_2 = training_data
-training_data_2['Overall_Qual'] = training_data_2['Overall_Qual'] + noise
-plt.figure()
-sns.scatterplot(data=training_data_2, x='Overall_Qual', y='SalePrice')
-
-plt.figure(figsize=(10, 5))
-sns.histplot(training_data, x='Year_Built')
-plt.xlabel('Year Built')
-plt.ylabel("Frequency")
-
-
-#feature engineering
-def add_total_bathrooms(data):
-    """
-    Input:
-      data (data frame): a data frame containing at least 4 numeric columns 
-            Bsmt_Full_Bath, Full_Bath, Bsmt_Half_Bath, and Half_Bath
-    """
-    with_bathrooms = data.copy()
-    bath_vars = ['Bsmt_Full_Bath', 'Full_Bath', 'Bsmt_Half_Bath', 'Half_Bath']
-    weights = pd.Series([1, 1, 0.5, 0.5], index=bath_vars)
-    with_bathrooms['TotalBathrooms'] = with_bathrooms[bath_vars].fillna(
-        0) @ weights
-    return with_bathrooms
-
-
-training_data = add_total_bathrooms(training_data)
-
-#check scatter plot
-training_data_2 = training_data
-training_data_2['TotalBathrooms'] = training_data_2['TotalBathrooms'] + noise
-plt.figure(figsize=(10, 8))
-sns.scatterplot(data=training_data_2, x='TotalBathrooms', y='SalePrice')
-
-
-def add_total_SF(data):
-    totalSFdf = data.copy()
-    totalSFdf['Total_SF'] = totalSFdf.Total_Bsmt_SF + totalSFdf.Gr_Liv_Area
-    return totalSFdf
-
-
-training_data = add_total_SF(training_data)
-
-plt.figure(figsize=(10, 5))
-sns.histplot(training_data, x='Total_SF')
-plt.xlabel('Total Square Feet')
-plt.ylabel("Frequency")
-
-
-def find_rich_neighborhoods(data, n=3, metric=np.mean):
-    neighborhoods = data.groupby('Neighborhood').agg(metric).sort_values(
-        'SalePrice', ascending=False).iloc[0:n].index.tolist()
-    return neighborhoods
-
-
-richhoods = training_data.groupby('Neighborhood').agg(np.mean).sort_values(
-    'SalePrice', ascending=False).iloc[0:20]
-plt.subplots(figsize=(5, 8))
-sns.barplot(y=richhoods.index, x=richhoods.SalePrice)
-plt.xticks(rotation=45)
-
-
-def add_in_rich_neighborhood(data, neighborhoods):
-    data['in_rich_neighborhood'] = data['Neighborhood'].isin(
-        neighborhoods).astype(int)
-    return data
-
-
-rich_neighborhoods = find_rich_neighborhoods(training_data, 4, np.mean)
-training_data = add_in_rich_neighborhood(training_data, rich_neighborhoods)
-
-categorical = (training_data.dtypes == "object")
-categorical_list = list(categorical[categorical].index)
-print(categorical_list)
-
-
-def encode(data):
-    categorical = (data.dtypes == "object")
-    categorical_list = list(categorical[categorical].index)
-    for i in categorical_list:
-        encode = preprocessing.LabelEncoder()
-        data[i] = encode.fit_transform(data[i])
-    return data
-
-
-training_data = encode(training_data)
-
-#Feature Importance (RF)
-
-X = training_data.drop(columns=['SalePrice'])
-Y = training_data['SalePrice']
-
-for i in range(len(num_cols) - 1):
-    meanvar = np.nanmean(X[num_cols[i]])
-    X[num_cols[i]].fillna(meanvar, inplace=True)
-
-X = X.fillna(method="pad")
-
-clf = ensemble.RandomForestClassifier()
-clf = clf.fit(X, Y)
-features = X.columns
-importances = clf.feature_importances_
-idxrf = np.argsort(importances)[::-1]
-
-plt.figure(figsize=(15, 10))
-sns.barplot(x=np.arange(len(idxrf)), y=importances[idxrf], color='black')
-plt.xticks(range(len(idxrf)), [features[i] for i in idxrf], rotation='vertical')
-
-plt.xlabel('Feature')
-plt.ylabel('Importance')
-plt.title('Importance of Feature')
-
-#number of features based on trees
-
-features = 79
-rmse = np.zeros(features - 1)
-
-# loop over the Ks
-
-train_error_vs_N = []
-cv_error_vs_N = []
-
-for i in range(1, features):
-    trainingx = X.iloc[:, idxrf[0:i]]
-    trainingy = Y
-
-    linear_model = lm.LinearRegression()
-
-    cv_results = cross_validate(
-        linear_model,
-        trainingx,
-        trainingy,
-        cv=5,
-        scoring=('r2', 'neg_root_mean_squared_error'),
-        return_train_score=True)
-
-    train_error_overfit = -np.mean(
-        cv_results['train_neg_root_mean_squared_error'])
-    test_error_overfit = -np.mean(
-        cv_results['test_neg_root_mean_squared_error'])
-    train_error_vs_N.append(train_error_overfit)
-    cv_error_vs_N.append(test_error_overfit)
-
-plt.figure(figsize=(10, 7))
-sns.lineplot(np.arange(1, features), train_error_vs_N)
-sns.lineplot(np.arange(1, features), cv_error_vs_N)
-plt.legend(["Training Error", "CV Error"])
-plt.xlabel("Number of Features")
-plt.ylabel("RMSE")
-plt.title('Importance of Feature (Random Forest)')
-
-print(cv_error_vs_N[5:15])
-
-numfeaturesrf = 13
-
-#Feature Importance (Gradient Boosting)
-
-clf = ensemble.GradientBoostingClassifier(n_estimators=25, verbose=3)
-clf = clf.fit(X, Y)
-features = X.columns
-importances = clf.feature_importances_
-idxgb = np.argsort(importances)[::-1]
-
-plt.figure(figsize=(15, 10))
-sns.barplot(x=np.arange(len(idxgb)), y=importances[idxgb], color='black')
-plt.xticks(range(len(idxgb)), [features[i] for i in idxgb], rotation='vertical')
-
-plt.xlabel('Feature')
-plt.ylabel('Importance')
-plt.title('Importance of Feature')
-
-#number of features based on gb
-
-features = 79
-rmse = np.zeros(features - 1)
-
-# loop over the Ks
-
-train_error_vs_N = []
-cv_error_vs_N = []
-
-for i in range(1, features):
-    trainingx = X.iloc[:, idxgb[0:i]]
-    trainingy = Y
-
-    linear_model = lm.LinearRegression()
-
-    cv_results = cross_validate(
-        linear_model,
-        trainingx,
-        trainingy,
-        cv=5,
-        scoring=('r2', 'neg_root_mean_squared_error'),
-        return_train_score=True)
-
-    train_error_overfit = -np.mean(
-        cv_results['train_neg_root_mean_squared_error'])
-    test_error_overfit = -np.mean(
-        cv_results['test_neg_root_mean_squared_error'])
-    train_error_vs_N.append(train_error_overfit)
-    cv_error_vs_N.append(test_error_overfit)
-
-plt.figure(figsize=(10, 7))
-sns.lineplot(np.arange(1, features), train_error_vs_N)
-sns.lineplot(np.arange(1, features), cv_error_vs_N)
-plt.legend(["Training Error", "CV Error"])
-plt.xlabel("Number of Features")
-plt.ylabel("RMSE")
-plt.title('Importance of Feature (Gradient Boosting)')
-
-print(cv_error_vs_N[10:20])
-
-numfeaturesgb = 20
-
-#number of features based on corr
-
-train_error_vs_N = []
-cv_error_vs_N = []
-linear_model = lm.LinearRegression()
-
-num_cols = training_data.dtypes[(training_data.dtypes == 'int64') |
-                                (training_data.dtypes == 'float64')].index
-corr_df = training_data.loc[:, num_cols].corr()
-sale_price_corr = corr_df['SalePrice'].drop(
-    'SalePrice', axis=0).sort_values(ascending=False)
-
-range_of_num_features = range(1, sale_price_corr.shape[0] + 1)
-
-for N in range_of_num_features:
-    sale_price_corr_first_N_features = sale_price_corr.iloc[:N]
-    saleprice = training_data['SalePrice'].drop(
-        training_data.index[training_data[
-            sale_price_corr.iloc[:N].index].isnull().any(1)])
-    indepVar = training_data[sale_price_corr_first_N_features.index].dropna()
-
-    scaler = preprocessing.StandardScaler()
-    indepVar = pd.DataFrame(
-        scaler.fit_transform(indepVar), columns=indepVar.columns)
-
-    cv_results = cross_validate(
-        linear_model,
-        indepVar,
-        saleprice,
-        cv=4,
-        scoring=('r2', 'neg_root_mean_squared_error'),
-        return_train_score=True)
-
-    train_error_overfit = -np.mean(
-        cv_results['train_neg_root_mean_squared_error'])
-    test_error_overfit = -np.mean(
-        cv_results['test_neg_root_mean_squared_error'])
-    train_error_vs_N.append(train_error_overfit)
-    cv_error_vs_N.append(test_error_overfit)
-
-plt.figure(figsize=(10, 7))
-sns.lineplot(range_of_num_features, train_error_vs_N)
-sns.lineplot(range_of_num_features, cv_error_vs_N)
-plt.legend(["Training Error", "CV Error"])
-plt.xlabel("Number of Features")
-plt.ylabel("RMSE")
-
-print(cv_error_vs_N[10:20])
-
-numfeaturescorr = 20
-
-#multicorr test
-
-features = sale_price_corr.iloc[:numfeaturescorr]
-
-plt.figure(figsize=(10, 10))
-sns.heatmap(training_data[features.index].corr(), annot=True)
-
-colinear = [
-    'TotRms_AbvGrd', 'Garage_Area', 'Year_Remod/Add', 'Full_Bath',
-    'Garage_Yr_Blt'
-]
-
-idxcorr = []
-
-for i in range(len(features.index.to_list())):
-    idxcorr.append(
-        training_data.columns.get_loc(sale_price_corr.index.to_list()[i]))
-idxcorr.insert(0, 76)
-idxcorr = np.array(idxcorr)
-
-#### MODELING ##################
-
-
-def select_columns(data, columns):
-    """Select only columns passed as arguments."""
-    return data.iloc[:, columns]
-
-
-def process_data_fm(data, overall_features):
-    data = remove_outliers(data, 'Gr_Liv_Area', 4000)
-    data = add_total_bathrooms(data)
-
-    # Transform Data, Select Features
-    data = add_in_rich_neighborhood(data, rich_neighborhoods)
-    data = select_columns(data, overall_features)
-
-    # Return predictors and response variables separately
-    X = data.drop(['SalePrice'], axis=1)
-
-    numf = X.dtypes[(X.dtypes == 'int64') | (X.dtypes == 'float64')].index
-    scaler = preprocessing.StandardScaler()
-    X.loc[:, numf] = scaler.fit_transform(X.loc[:, numf])
-    X = encode(X)
-
-    y = data.loc[:, 'SalePrice']
-    X = X.fillna(method="pad")
-    X = X.fillna(method="bfill")
-    return X, y
-
-
-#### OLS ###########
-
-
-def OLSrun(X_train_n, y_train, X_test_n, y_test):
-
-    final_model = lm.LinearRegression()
-    final_model.fit(X_train_n, y_train)
-    y_predicted_train = final_model.predict(X_train_n)
-    y_predicted_test = final_model.predict(X_test_n)
-
-    training_rmse = metrics.mean_squared_error(
-        y_predicted_train, y_train, squared=False)
-    test_rmse = metrics.mean_squared_error(
-        y_predicted_test, y_test, squared=False)
-    print(
-        'Training and Test Error:', round(training_rmse, 2),
-        round(test_rmse, 2))
-
-    #Line Plot
-    plt.figure(figsize=(10, 7))
-    ax = sns.scatterplot(y_predicted_train, y_train, label="Training")
-    sns.scatterplot(y_predicted_test, y_test, label="Test", ax=ax)
-    sns.lineplot([0, 600000], [0, 600000], color='red')
-
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('Actual Sales Price')
-    ax.legend(loc='upper left')
-    plt.show()
-
-    #Residual Plots
-    plt.figure(figsize=(10, 7))
-    ax = sns.residplot(y_predicted_train, y_train, label="Training")
-    sns.residplot(y_predicted_test, y_test, label="Test", ax=ax)
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot')
-    ax.legend(loc='upper left')
-    plt.show()
-
-
-##### Ridge ############
-
-
-def ridgerun(X_train_n, y_train_n, X_test_n, y_test_n):
-
-    param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
-    final_ridge = GridSearchCV(
-        lm.Ridge(),
-        cv=5,
-        param_grid=param_grid,
-        scoring='neg_mean_squared_error')
-    final_ridge.fit(X_train_n, y_train_n)
-    alpha = final_ridge.best_params_['alpha']
-    print('Initial Best Alpha', alpha)
-
-    param_gridimp = {
-        'alpha':
-            list(
-                np.linspace(alpha - (alpha * 0.2), alpha + (alpha * 0.2), 200))
-    }
-    final_ridgeimp = GridSearchCV(
-        lm.Ridge(),
-        cv=5,
-        param_grid=param_gridimp,
-        scoring='neg_mean_squared_error')
-    final_ridgeimp.fit(X_train_n, y_train_n)
-    alphaimp = final_ridgeimp.best_params_['alpha']
-    print('Improved Best Alpha', round(alphaimp, 2))
-
-    y_ridge_train = final_ridgeimp.predict(X_train_n)
-    y_ridge_test = final_ridgeimp.predict(X_test_n)
-
-    training_rmse = metrics.mean_squared_error(
-        y_ridge_train, y_train_n, squared=False)
-    test_rmse = metrics.mean_squared_error(
-        y_ridge_test, y_test_n, squared=False)
-    print(
-        'Training and Test Error:', round(training_rmse, 2),
-        round(test_rmse, 2))
-
-    #Line Plot
-    plt.figure(figsize=(10, 7))
-
-    ax = sns.scatterplot(y_ridge_train, y_train_n, label="Training")
-    sns.scatterplot(y_ridge_test, y_test_n, label="Test", ax=ax)
-    sns.lineplot([0, 600000], [0, 600000], color='red')
-
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('Actual Sales Price')
-    ax.legend(loc='upper left')
-    plt.show()
-
-    #Residual Plots
-    plt.figure(figsize=(10, 7))
-    ax = sns.residplot(y_ridge_train, y_train_n, label="Training")
-    sns.residplot(y_ridge_test, y_test_n, label="Test", ax=ax)
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot')
-    ax.legend(loc='upper left')
-    plt.show()
-
-    #Feature Importance
-    ridge = final_ridgeimp.best_estimator_
-
-    coefs = pd.DataFrame({'coefs': ridge.coef_}, index=X_train_n.columns)
-    coefs['coefs_abs'] = np.abs(coefs.coefs)
-
-    top_coefs = coefs.sort_values('coefs_abs', ascending=False).head(10)
-    plt.figure(figsize=(8, 10))
-    sns.barplot(top_coefs.coefs_abs, top_coefs.index)
-    plt.title('Ridge Regression: Top Features')
-    plt.xlabel('Absolute Coefficient')
-    plt.show()
-
-
-##### LASSO ############
-
-
-def lassorun(X_train_n, y_train_n, X_test_n, y_test_n):
-
-    param_grid = {
-        'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100., 500., 1000.]
-    }
-    final_lasso = GridSearchCV(
-        lm.Lasso(),
-        cv=5,
-        param_grid=param_grid,
-        scoring='neg_mean_squared_error')
-    final_lasso.fit(X_train_n, y_train_n)
-    alpha = final_lasso.best_params_['alpha']
-    print('Initial Best Alpha', alpha)
-
-    param_gridimp = {
-        'alpha':
-            list(
-                np.linspace(alpha - (alpha * 0.2), alpha + (alpha * 0.2), 1000))
-    }
-    final_lassoimp = GridSearchCV(
-        lm.Lasso(),
-        cv=5,
-        param_grid=param_gridimp,
-        scoring='neg_mean_squared_error')
-    final_lassoimp.fit(X_train_n, y_train_n)
-    alphaimp = final_lassoimp.best_params_['alpha']
-    print('Improved Best Alpha', round(alphaimp, 2))
-
-    y_lasso_train = final_lassoimp.predict(X_train_n)
-    y_lasso_test = final_lassoimp.predict(X_test_n)
-
-    training_rmse = metrics.mean_squared_error(
-        y_lasso_train, y_train_n, squared=False)
-    test_rmse = metrics.mean_squared_error(
-        y_lasso_test, y_test_n, squared=False)
-    print(
-        'Training and Test Error:', round(training_rmse, 2),
-        round(test_rmse, 2))
-
-    #Line Plot
-    plt.figure(figsize=(10, 7))
-
-    ax = sns.scatterplot(y_lasso_train, y_train_n, label="Training")
-    sns.scatterplot(y_lasso_test, y_test_n, label="Test", ax=ax)
-    sns.lineplot([0, 600000], [0, 600000], color='red')
-
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('Actual Sales Price')
-    ax.legend(loc='upper left')
-    plt.show()
-
-    #Residual Plots
-    plt.figure(figsize=(10, 7))
-    ax = sns.residplot(y_lasso_train, y_train_n, label="Training")
-    sns.residplot(y_lasso_test, y_test_n, label="Test", ax=ax)
-    plt.xlabel('Predicted Sales Price')
-    plt.ylabel('RMSE')
-    plt.title('Residual Plot')
-    ax.legend(loc='upper left')
-    plt.show()
-
-    #Feature Importance
-    lasso = final_lassoimp.best_estimator_
-
-    coefs = pd.DataFrame({'coefs': lasso.coef_}, index=X_train_n.columns)
-    coefs['coefs_abs'] = np.abs(coefs.coefs)
-
-    top_coefs = coefs.sort_values('coefs_abs', ascending=False).head(10)
-    plt.figure(figsize=(8, 10))
-    sns.barplot(top_coefs.coefs_abs, top_coefs.index)
-    plt.title('LASSO Regression: Top Features')
-    plt.xlabel('Absolute Coefficient')
-    plt.show()
-
-
-def runmodels(training_data, test_data, numfeatures, idx):
-    training_data = add_total_SF(training_data)
-    test_data = add_total_SF(test_data)
-
-    X_train, y_train = process_data_fm(training_data, idx[0:numfeatures])
-    X_test, y_test = process_data_fm(test_data, idx[0:numfeatures])
-
-    X_train_r2 = sm.add_constant(X_train)
-    models = sm.OLS(y_train, X_train_r2)
-    results = models.fit()
-    print(results.summary())
-
-    X_train_n = X_train
-    X_test_n = X_test
-
-    OLSrun(X_train_n, y_train, X_test_n, y_test)
-    ridgerun(X_train_n, y_train, X_test_n, y_test)
-    lassorun(X_train_n, y_train, X_test_n, y_test)
-
-
-##### Running each model ########
-
-full_data = pd.read_csv(
-    'https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv'
-)
-
-#drop too many nan
-nan = nanmean[nanmean > 25].sort_values(ascending=False)
-full_data.drop(columns=nan.index, inplace=True)
-
-training_data, test_data = train_test_split(
-    full_data, random_state=42, test_size=0.2)
-
-training_data.shape
-
-#RF
-runmodels(training_data, test_data, numfeaturesrf, idxrf)
-
-#GB
-runmodels(training_data, test_data, numfeaturesgb, idxgb)
-
-runmodels(training_data, test_data, 40, idxgb)
-
-#corr
-runmodels(training_data, test_data, numfeaturescorr, idxcorr)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+
+
+class HousingAnalyzer:
+    """A comprehensive analyzer for Ames Housing price prediction."""
+
+    # Configuration constants
+    DATA_URL = 'https://raw.githubusercontent.com/benchang123/Ames-Housing/master/ames.csv'
+    RANDOM_STATE = 42
+    TEST_SIZE = 0.2
+    NA_THRESHOLD = 25  # Percentage threshold for dropping columns with NA
+    OUTLIER_THRESHOLD = 4000  # Living area outlier threshold
+    PLOTS_DIR = Path('plots')
+
+    def __init__(self, data_path: Optional[str] = None):
+        """
+        Initialize the HousingAnalyzer.
+        
+        Args:
+            data_path: Optional path to local CSV file. Uses remote URL if None.
+        """
+        self.data_path = data_path
+        self.full_data: Optional[pd.DataFrame] = None
+        self.training_data: Optional[pd.DataFrame] = None
+        self.test_data: Optional[pd.DataFrame] = None
+        self.rich_neighborhoods: List[str] = []
+        self.feature_indices: Dict[str, np.ndarray] = {}
+        self.feature_names: Dict[str, List[str]] = {}
+        self.optimal_features: Dict[str, int] = {}
+        self.plot_counter: int = 0
+        self.PLOTS_DIR.mkdir(exist_ok=True)
+
+    def _save_plot(self, name: str) -> None:
+        """Save current plot to file and close it."""
+        self.plot_counter += 1
+        filename = self.PLOTS_DIR / f"{self.plot_counter:02d}_{name}.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Saved: {filename}")
+
+    def load_data(self) -> None:
+        """Load housing data from CSV file or URL."""
+        source = self.data_path if self.data_path else self.DATA_URL
+        self.full_data = pd.read_csv(source)
+        print(
+            f"Loaded {len(self.full_data)} records with {len(self.full_data.columns)} features"
+        )
+
+    def split_data(self) -> None:
+        """Split data into training and test sets."""
+        if self.full_data is None:
+            raise ValueError("Data must be loaded first. Call load_data()")
+        self.training_data, self.test_data = train_test_split(
+            self.full_data,
+            random_state=self.RANDOM_STATE,
+            test_size=self.TEST_SIZE)
+        print(
+            f"Training set: {len(self.training_data)}, Test set: {len(self.test_data)}"
+        )
+
+    # ==================== EDA Methods ====================
+
+    def remove_high_na_columns(self) -> pd.Series:
+        """Remove columns with NA percentage above threshold."""
+        if self.training_data is None:
+            raise ValueError("Data must be split first. Call split_data()")
+
+        na_percent = self.training_data.isna().mean() * 100
+        high_na = na_percent[na_percent > self.NA_THRESHOLD].sort_values(
+            ascending=False)
+        print(
+            f"Removing {len(high_na)} columns with >{self.NA_THRESHOLD}% NA values:"
+        )
+        print(high_na)
+
+        self.training_data.drop(columns=high_na.index, inplace=True)
+        if self.full_data is not None:
+            cols_to_drop = [
+                c for c in high_na.index if c in self.full_data.columns
+            ]
+            self.full_data.drop(columns=cols_to_drop, inplace=True)
+        return high_na
+
+    def analyze_sales_by_year(self) -> None:
+        """Plot number of houses sold per year."""
+        self.training_data.groupby('Yr_Sold').count()['Order'].plot(kind='bar')
+        plt.title('Houses Sold by Year')
+        plt.xlabel('Year')
+        plt.ylabel('Count')
+        self._save_plot('sales_by_year')
+
+    def analyze_living_area_vs_price(self) -> None:
+        """Create joint plot of living area vs sale price."""
+        sns.jointplot(x='Gr_Liv_Area', y='SalePrice', data=self.training_data)
+        self._save_plot('living_area_vs_price')
+
+    def get_price_statistics(self) -> Tuple[float, float, Tuple[float, float]]:
+        """Calculate sale price statistics."""
+        mean_price = np.mean(self.training_data['SalePrice'])
+        std_price = np.std(self.training_data['SalePrice'])
+        price_range = (mean_price - 2 * std_price, mean_price + 2 * std_price)
+
+        print(f'Mean Sales Price: ${mean_price:,.2f}')
+        print(f'STD Sales Price: ${std_price:,.2f}')
+        print(f'2 SD Range: ${price_range[0]:,.2f} - ${price_range[1]:,.2f}')
+        return mean_price, std_price, price_range
+
+    def plot_price_distribution(self) -> None:
+        """Plot sale price distribution."""
+        plt.figure(figsize=(10, 5))
+        sns.histplot(data=self.training_data, x='SalePrice')
+        plt.xlabel("Sales Price")
+        plt.ylabel("Frequency")
+        plt.title("Distribution of Sale Prices")
+        self._save_plot('price_distribution')
+
+    @staticmethod
+    def remove_outliers(
+            data: pd.DataFrame, variable: str, upper: float) -> pd.DataFrame:
+        """Remove outliers above a threshold."""
+        return data.loc[data[variable] < upper, :].copy()
+
+    def remove_living_area_outliers(self) -> None:
+        """Remove living area outliers from training data."""
+        outliers = self.training_data.loc[self.training_data['Gr_Liv_Area'] >
+                                          self.OUTLIER_THRESHOLD,
+                                          ['Gr_Liv_Area', 'SalePrice']]
+        print(
+            f"Removing {len(outliers)} outliers with Gr_Liv_Area > {self.OUTLIER_THRESHOLD}"
+        )
+        self.training_data = self.remove_outliers(
+            self.training_data, 'Gr_Liv_Area', self.OUTLIER_THRESHOLD)
+
+    def plot_neighborhood_distribution(self) -> None:
+        """Plot neighborhood distribution."""
+        self.training_data.groupby('Neighborhood').size().sort_values(
+            ascending=False).plot(kind='bar')
+        plt.title('Houses by Neighborhood')
+        plt.xlabel('Neighborhood')
+        plt.ylabel('Count')
+        plt.tight_layout()
+        self._save_plot('neighborhood_distribution')
+
+    def get_numeric_columns(self, data: pd.DataFrame) -> pd.Index:
+        """Get numeric column names from dataframe."""
+        return data.dtypes[(data.dtypes == 'int64') |
+                           (data.dtypes == 'float64')].index
+
+    def analyze_correlations(self) -> pd.Series:
+        """Analyze correlations with sale price."""
+        num_cols = self.get_numeric_columns(self.training_data)
+        corr_df = self.training_data.loc[:, num_cols].corr()
+        sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
+            ascending=False)
+
+        plt.figure(figsize=(10, 15))
+        sns.barplot(y=sale_price_corr.index, x=sale_price_corr.values)
+        plt.xlabel("Correlation")
+        plt.ylabel("Feature")
+        plt.title("Feature Correlations with Sale Price")
+        plt.tight_layout()
+        self._save_plot('correlations')
+
+        return sale_price_corr
+
+    def plot_feature_vs_price(
+            self, feature: str, add_jitter: bool = True) -> None:
+        """Plot a feature against sale price with optional jitter."""
+        data = self.training_data.copy()
+        if add_jitter:
+            noise = np.random.normal(0, 0.5, len(data))
+            data[feature] = data[feature] + noise
+
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(data=data, x=feature, y='SalePrice')
+        plt.title(f'{feature} vs Sale Price')
+        self._save_plot(f'feature_{feature}_vs_price')
+
+    # ==================== Feature Engineering ====================
+
+    @staticmethod
+    def add_total_bathrooms(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add total bathrooms feature combining full and half baths.
+        
+        Args:
+            data: DataFrame with bathroom columns
+            
+        Returns:
+            DataFrame with TotalBathrooms column added
+        """
+        result = data.copy()
+        bath_vars = [
+            'Bsmt_Full_Bath', 'Full_Bath', 'Bsmt_Half_Bath', 'Half_Bath'
+        ]
+        weights = pd.Series([1, 1, 0.5, 0.5], index=bath_vars)
+        result['TotalBathrooms'] = result[bath_vars].fillna(0) @ weights
+        return result
+
+    @staticmethod
+    def add_total_sf(data: pd.DataFrame) -> pd.DataFrame:
+        """Add total square footage feature."""
+        result = data.copy()
+        result['Total_SF'] = result['Total_Bsmt_SF'] + result['Gr_Liv_Area']
+        return result
+
+    @staticmethod
+    def find_rich_neighborhoods(data: pd.DataFrame, n: int = 3) -> List[str]:
+        """Find top n neighborhoods by average sale price."""
+        return data.groupby('Neighborhood')['SalePrice'].mean().sort_values(
+            ascending=False).iloc[:n].index.tolist()
+
+    @staticmethod
+    def add_rich_neighborhood_flag(
+            data: pd.DataFrame, neighborhoods: List[str]) -> pd.DataFrame:
+        """Add binary flag for rich neighborhoods."""
+        result = data.copy()
+        result['in_rich_neighborhood'] = result['Neighborhood'].isin(
+            neighborhoods).astype(int)
+        return result
+
+    def plot_rich_neighborhoods(self, n: int = 20) -> None:
+        """Plot top neighborhoods by average sale price."""
+        rich_hoods = self.training_data.groupby(
+            'Neighborhood')['SalePrice'].mean().sort_values(
+                ascending=False).iloc[:n]
+
+        plt.figure(figsize=(8, 10))
+        sns.barplot(y=rich_hoods.index, x=rich_hoods.values)
+        plt.title(f'Top {n} Neighborhoods by Avg Sale Price')
+        plt.xlabel('Average Sale Price')
+        plt.tight_layout()
+        self._save_plot('rich_neighborhoods')
+
+    @staticmethod
+    def encode_categorical(data: pd.DataFrame) -> pd.DataFrame:
+        """Label encode categorical columns."""
+        result = data.copy()
+        categorical_cols = result.select_dtypes(include=['object']).columns
+
+        for col in categorical_cols:
+            encoder = preprocessing.LabelEncoder()
+            result[col] = encoder.fit_transform(result[col].astype(str))
+        return result
+
+    def apply_feature_engineering(self) -> None:
+        """Apply all feature engineering steps to training data."""
+        self.training_data = self.add_total_bathrooms(self.training_data)
+        self.training_data = self.add_total_sf(self.training_data)
+        self.rich_neighborhoods = self.find_rich_neighborhoods(
+            self.training_data, 4)
+        self.training_data = self.add_rich_neighborhood_flag(
+            self.training_data, self.rich_neighborhoods)
+        self.training_data = self.encode_categorical(self.training_data)
+        print("Feature engineering completed")
+
+    # ==================== Feature Importance ====================
+
+    def prepare_features_target(self) -> Tuple[pd.DataFrame, pd.Series]:
+        """Prepare feature matrix X and target vector y."""
+        X = self.training_data.drop(columns=['SalePrice'])
+        y = self.training_data['SalePrice']
+
+        num_cols = self.get_numeric_columns(X)
+        for col in num_cols:
+            X[col] = X[col].fillna(X[col].mean())
+
+        X = X.ffill().bfill()
+        return X, y
+
+    def compute_feature_importance_rf(
+            self, X: pd.DataFrame, y: pd.Series) -> np.ndarray:
+        """Compute feature importance using Random Forest."""
+        clf = RandomForestRegressor(
+            n_estimators=100, random_state=self.RANDOM_STATE, n_jobs=-1)
+        clf.fit(X, y)
+
+        importances = clf.feature_importances_
+        idx = np.argsort(importances)[::-1]
+
+        plt.figure(figsize=(15, 10))
+        sns.barplot(x=np.arange(len(idx)), y=importances[idx], color='black')
+        plt.xticks(range(len(idx)), [X.columns[i] for i in idx], rotation=90)
+        plt.xlabel('Feature')
+        plt.ylabel('Importance')
+        plt.title('Feature Importance (Random Forest)')
+        plt.tight_layout()
+        self._save_plot('feature_importance_rf')
+
+        self.feature_indices['rf'] = idx
+        self.feature_names['rf'] = [X.columns[i] for i in idx]
+        return idx
+
+    def compute_feature_importance_gb(
+            self, X: pd.DataFrame, y: pd.Series) -> np.ndarray:
+        """Compute feature importance using Gradient Boosting."""
+        clf = GradientBoostingRegressor(
+            n_estimators=100, random_state=self.RANDOM_STATE, verbose=0)
+        clf.fit(X, y)
+
+        importances = clf.feature_importances_
+        idx = np.argsort(importances)[::-1]
+
+        plt.figure(figsize=(15, 10))
+        sns.barplot(x=np.arange(len(idx)), y=importances[idx], color='black')
+        plt.xticks(range(len(idx)), [X.columns[i] for i in idx], rotation=90)
+        plt.xlabel('Feature')
+        plt.ylabel('Importance')
+        plt.title('Feature Importance (Gradient Boosting)')
+        plt.tight_layout()
+        self._save_plot('feature_importance_gb')
+
+        self.feature_indices['gb'] = idx
+        self.feature_names['gb'] = [X.columns[i] for i in idx]
+        return idx
+
+    def find_optimal_features(
+            self,
+            X: pd.DataFrame,
+            y: pd.Series,
+            feature_idx: np.ndarray,
+            method_name: str,
+            max_features: int = 79,
+            cv: int = 5) -> int:
+        """Find optimal number of features using cross-validation."""
+        train_errors, cv_errors = [], []
+
+        for i in range(1, min(max_features, len(feature_idx))):
+            X_subset = X.iloc[:, feature_idx[:i]]
+            model = lm.LinearRegression()
+
+            cv_results = cross_validate(
+                model,
+                X_subset,
+                y,
+                cv=cv,
+                scoring=('r2', 'neg_root_mean_squared_error'),
+                return_train_score=True)
+
+            train_errors.append(
+                -np.mean(cv_results['train_neg_root_mean_squared_error']))
+            cv_errors.append(
+                -np.mean(cv_results['test_neg_root_mean_squared_error']))
+
+        plt.figure(figsize=(10, 7))
+        plt.plot(
+            range(1,
+                  len(train_errors) + 1),
+            train_errors,
+            label="Training Error")
+        plt.plot(range(1, len(cv_errors) + 1), cv_errors, label="CV Error")
+        plt.legend()
+        plt.xlabel("Number of Features")
+        plt.ylabel("RMSE")
+        plt.title(f'Feature Selection ({method_name})')
+        self._save_plot(
+            f'feature_selection_{method_name.lower().replace(" ", "_")}')
+
+        optimal = np.argmin(cv_errors) + 1
+        self.optimal_features[method_name] = optimal
+        print(f"Optimal features for {method_name}: {optimal}")
+        return optimal
+
+    def compute_correlation_feature_indices(self) -> np.ndarray:
+        """Compute feature indices based on correlation with sale price."""
+        num_cols = self.get_numeric_columns(self.training_data)
+        corr_df = self.training_data.loc[:, num_cols].corr()
+        sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
+            ascending=False)
+
+        idx = []
+        feature_names = []
+        for feature in sale_price_corr.index:
+            idx.append(self.training_data.columns.get_loc(feature))
+            feature_names.append(feature)
+
+        sale_price_idx = self.training_data.columns.get_loc('SalePrice')
+        idx.insert(0, sale_price_idx)
+        feature_names.insert(0, 'SalePrice')
+
+        self.feature_indices['corr'] = np.array(idx)
+        self.feature_names['corr'] = feature_names
+        return np.array(idx)
+
+    def plot_multicollinearity(self, n_features: int = 20) -> None:
+        """Plot correlation heatmap for top features."""
+        num_cols = self.get_numeric_columns(self.training_data)
+        corr_df = self.training_data.loc[:, num_cols].corr()
+        sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
+            ascending=False)
+        top_features = sale_price_corr.iloc[:n_features].index
+
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            self.training_data[top_features].corr(),
+            annot=True,
+            fmt='.2f',
+            cmap='coolwarm')
+        plt.title(f'Multicollinearity Check - Top {n_features} Features')
+        plt.tight_layout()
+        self._save_plot('multicollinearity')
+
+    # ==================== Modeling ====================
+
+    def process_data_for_modeling(
+            self, data: pd.DataFrame,
+            feature_names: List[str]) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Process data for modeling: remove outliers, engineer features, scale, and encode.
+        
+        Args:
+            data: Raw dataframe
+            feature_names: List of feature column names to select
+            
+        Returns:
+            Tuple of (X features, y target)
+        """
+        data = self.remove_outliers(data, 'Gr_Liv_Area', self.OUTLIER_THRESHOLD)
+        data = self.add_total_bathrooms(data)
+        data = self.add_total_sf(data)
+        data = self.add_rich_neighborhood_flag(data, self.rich_neighborhoods)
+
+        # Ensure SalePrice is included
+        if 'SalePrice' not in feature_names:
+            feature_names = feature_names + ['SalePrice']
+
+        # Select only columns that exist in the data
+        available_features = [f for f in feature_names if f in data.columns]
+        data = data[available_features]
+
+        X = data.drop(['SalePrice'], axis=1)
+        y = data['SalePrice']
+
+        num_cols = self.get_numeric_columns(X)
+        scaler = preprocessing.StandardScaler()
+        X.loc[:, num_cols] = scaler.fit_transform(X.loc[:, num_cols])
+        X = self.encode_categorical(X)
+        X = X.ffill().bfill()
+
+        return X, y
+
+    def run_ols(
+            self, X_train: pd.DataFrame, y_train: pd.Series,
+            X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
+        """
+        Run Ordinary Least Squares regression.
+        
+        Returns:
+            Dictionary with training and test RMSE
+        """
+        model = lm.LinearRegression()
+        model.fit(X_train, y_train)
+
+        y_pred_train = model.predict(X_train)
+        y_pred_test = model.predict(X_test)
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+
+        print(
+            f'OLS - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
+        )
+
+        # Prediction vs Actual plot
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
+        axes[0].plot([0, 600000], [0, 600000], 'r-', label="Perfect Prediction")
+        axes[0].set_xlabel('Predicted Sales Price')
+        axes[0].set_ylabel('Actual Sales Price')
+        axes[0].set_title('OLS: Predicted vs Actual')
+        axes[0].legend()
+
+        # Residual plot
+        train_residuals = y_train - y_pred_train
+        test_residuals = y_test - y_pred_test
+        axes[1].scatter(
+            y_pred_train, train_residuals, alpha=0.5, label="Training")
+        axes[1].scatter(y_pred_test, test_residuals, alpha=0.5, label="Test")
+        axes[1].axhline(y=0, color='r', linestyle='-')
+        axes[1].set_xlabel('Predicted Sales Price')
+        axes[1].set_ylabel('Residual')
+        axes[1].set_title('OLS: Residual Plot')
+        axes[1].legend()
+
+        plt.tight_layout()
+        self._save_plot('ols_results')
+
+        return {'train_rmse': train_rmse, 'test_rmse': test_rmse}
+
+    def run_ridge(
+            self, X_train: pd.DataFrame, y_train: pd.Series,
+            X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, Any]:
+        """
+        Run Ridge regression with hyperparameter tuning.
+        
+        Returns:
+            Dictionary with best alpha, training and test RMSE
+        """
+        # Initial grid search
+        param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
+        grid_search = GridSearchCV(
+            lm.Ridge(),
+            cv=5,
+            param_grid=param_grid,
+            scoring='neg_mean_squared_error')
+        grid_search.fit(X_train, y_train)
+        initial_alpha = grid_search.best_params_['alpha']
+        print(f'Ridge - Initial Best Alpha: {initial_alpha}')
+
+        # Fine-tuned grid search
+        fine_grid = {
+            'alpha':
+                list(
+                    np.linspace(initial_alpha * 0.8, initial_alpha * 1.2, 200))
+        }
+        fine_search = GridSearchCV(
+            lm.Ridge(),
+            cv=5,
+            param_grid=fine_grid,
+            scoring='neg_mean_squared_error')
+        fine_search.fit(X_train, y_train)
+        best_alpha = fine_search.best_params_['alpha']
+        print(f'Ridge - Tuned Best Alpha: {best_alpha:.4f}')
+
+        y_pred_train = fine_search.predict(X_train)
+        y_pred_test = fine_search.predict(X_test)
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+        print(
+            f'Ridge - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
+        )
+
+        # Plots
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # Prediction vs Actual
+        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
+        axes[0].plot([0, 600000], [0, 600000], 'r-')
+        axes[0].set_xlabel('Predicted Sales Price')
+        axes[0].set_ylabel('Actual Sales Price')
+        axes[0].set_title('Ridge: Predicted vs Actual')
+        axes[0].legend()
+
+        # Residuals
+        axes[1].scatter(
+            y_pred_train, y_train - y_pred_train, alpha=0.5, label="Training")
+        axes[1].scatter(
+            y_pred_test, y_test - y_pred_test, alpha=0.5, label="Test")
+        axes[1].axhline(y=0, color='r', linestyle='-')
+        axes[1].set_xlabel('Predicted Sales Price')
+        axes[1].set_ylabel('Residual')
+        axes[1].set_title('Ridge: Residual Plot')
+        axes[1].legend()
+
+        # Feature Importance
+        coefs = pd.DataFrame(
+            {
+                'coef': fine_search.best_estimator_.coef_,
+                'abs_coef': np.abs(fine_search.best_estimator_.coef_)
+            },
+            index=X_train.columns)
+        top_coefs = coefs.nlargest(10, 'abs_coef')
+        sns.barplot(x=top_coefs['abs_coef'], y=top_coefs.index, ax=axes[2])
+        axes[2].set_title('Ridge: Top 10 Features')
+        axes[2].set_xlabel('Absolute Coefficient')
+
+        plt.tight_layout()
+        self._save_plot('ridge_results')
+
+        return {
+            'best_alpha': best_alpha,
+            'train_rmse': train_rmse,
+            'test_rmse': test_rmse
+        }
+
+    def run_lasso(
+            self, X_train: pd.DataFrame, y_train: pd.Series,
+            X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, Any]:
+        """
+        Run LASSO regression with hyperparameter tuning.
+        
+        Returns:
+            Dictionary with best alpha, training and test RMSE
+        """
+        # Initial grid search
+        param_grid = {
+            'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100., 500., 1000.]
+        }
+        grid_search = GridSearchCV(
+            lm.Lasso(),
+            cv=5,
+            param_grid=param_grid,
+            scoring='neg_mean_squared_error')
+        grid_search.fit(X_train, y_train)
+        initial_alpha = grid_search.best_params_['alpha']
+        print(f'LASSO - Initial Best Alpha: {initial_alpha}')
+
+        # Fine-tuned grid search
+        fine_grid = {
+            'alpha':
+                list(
+                    np.linspace(initial_alpha * 0.8, initial_alpha * 1.2, 1000))
+        }
+        fine_search = GridSearchCV(
+            lm.Lasso(),
+            cv=5,
+            param_grid=fine_grid,
+            scoring='neg_mean_squared_error')
+        fine_search.fit(X_train, y_train)
+        best_alpha = fine_search.best_params_['alpha']
+        print(f'LASSO - Tuned Best Alpha: {best_alpha:.4f}')
+
+        y_pred_train = fine_search.predict(X_train)
+        y_pred_test = fine_search.predict(X_test)
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+        print(
+            f'LASSO - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
+        )
+
+        # Plots
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # Prediction vs Actual
+        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
+        axes[0].plot([0, 600000], [0, 600000], 'r-')
+        axes[0].set_xlabel('Predicted Sales Price')
+        axes[0].set_ylabel('Actual Sales Price')
+        axes[0].set_title('LASSO: Predicted vs Actual')
+        axes[0].legend()
+
+        # Residuals
+        axes[1].scatter(
+            y_pred_train, y_train - y_pred_train, alpha=0.5, label="Training")
+        axes[1].scatter(
+            y_pred_test, y_test - y_pred_test, alpha=0.5, label="Test")
+        axes[1].axhline(y=0, color='r', linestyle='-')
+        axes[1].set_xlabel('Predicted Sales Price')
+        axes[1].set_ylabel('Residual')
+        axes[1].set_title('LASSO: Residual Plot')
+        axes[1].legend()
+
+        # Feature Importance
+        coefs = pd.DataFrame(
+            {
+                'coef': fine_search.best_estimator_.coef_,
+                'abs_coef': np.abs(fine_search.best_estimator_.coef_)
+            },
+            index=X_train.columns)
+        top_coefs = coefs.nlargest(10, 'abs_coef')
+        sns.barplot(x=top_coefs['abs_coef'], y=top_coefs.index, ax=axes[2])
+        axes[2].set_title('LASSO: Top 10 Features')
+        axes[2].set_xlabel('Absolute Coefficient')
+
+        plt.tight_layout()
+        self._save_plot('lasso_results')
+
+        return {
+            'best_alpha': best_alpha,
+            'train_rmse': train_rmse,
+            'test_rmse': test_rmse
+        }
+
+    def run_all_models(self, method: str, num_features: int) -> Dict[str, Dict]:
+        """
+        Run all regression models (OLS, Ridge, LASSO) for a given feature selection method.
+        
+        Args:
+            method: Feature selection method ('rf', 'gb', or 'corr')
+            num_features: Number of top features to use
+            
+        Returns:
+            Dictionary with results from all models
+        """
+        if method not in self.feature_names:
+            raise ValueError(
+                f"Feature names for '{method}' not computed. Run feature importance first."
+            )
+
+        # Use feature names instead of indices for consistent column selection
+        selected_features = self.feature_names[method][:num_features]
+
+        # Reload and prepare data
+        train_data = self.training_data.copy()
+        test_data = self.test_data.copy()
+
+        X_train, y_train = self.process_data_for_modeling(
+            train_data, selected_features)
+        X_test, y_test = self.process_data_for_modeling(
+            test_data, selected_features)
+
+        # OLS Summary
+        X_train_const = sm.add_constant(X_train)
+        ols_model = sm.OLS(y_train, X_train_const)
+        print(ols_model.fit().summary())
+
+        print(f"\n{'='*60}")
+        print(
+            f"Running models with {method.upper()} feature selection ({num_features} features)"
+        )
+        print(f"{'='*60}\n")
+
+        results = {
+            'ols': self.run_ols(X_train, y_train, X_test, y_test),
+            'ridge': self.run_ridge(X_train, y_train, X_test, y_test),
+            'lasso': self.run_lasso(X_train, y_train, X_test, y_test)
+        }
+
+        return results
+
+    # ==================== Main Pipeline ====================
+
+    def run_eda(self) -> None:
+        """Run complete EDA pipeline."""
+        print("\n" + "=" * 60)
+        print("EXPLORATORY DATA ANALYSIS")
+        print("=" * 60 + "\n")
+
+        self.remove_high_na_columns()
+        self.analyze_sales_by_year()
+        self.analyze_living_area_vs_price()
+        self.get_price_statistics()
+        self.plot_price_distribution()
+        self.remove_living_area_outliers()
+        self.plot_neighborhood_distribution()
+        self.analyze_correlations()
+        self.plot_feature_vs_price('Bedroom_AbvGr')
+        self.plot_feature_vs_price('Overall_Qual')
+
+    def run_feature_analysis(self) -> None:
+        """Run complete feature importance analysis."""
+        print("\n" + "=" * 60)
+        print("FEATURE IMPORTANCE ANALYSIS")
+        print("=" * 60 + "\n")
+
+        self.apply_feature_engineering()
+        X, y = self.prepare_features_target()
+
+        # Random Forest
+        self.compute_feature_importance_rf(X, y)
+        self.find_optimal_features(
+            X, y, self.feature_indices['rf'], 'Random Forest')
+
+        # Gradient Boosting
+        self.compute_feature_importance_gb(X, y)
+        self.find_optimal_features(
+            X, y, self.feature_indices['gb'], 'Gradient Boosting')
+
+        # Correlation-based
+        self.compute_correlation_feature_indices()
+        self.plot_multicollinearity()
+
+    def run_complete_analysis(self) -> None:
+        """Run the complete housing price analysis pipeline."""
+        print("=" * 60)
+        print("AMES HOUSING PRICE ANALYSIS")
+        print("=" * 60)
+
+        # Load and prepare data
+        self.load_data()
+        self.split_data()
+
+        # EDA
+        self.run_eda()
+
+        # Feature Analysis
+        self.run_feature_analysis()
+
+        # Run models with different feature selection methods
+        print("\n" + "=" * 60)
+        print("MODEL TRAINING AND EVALUATION")
+        print("=" * 60 + "\n")
+
+        results = {}
+
+        if 'rf' in self.feature_indices:
+            num_features_rf = self.optimal_features.get('Random Forest', 13)
+            results['rf'] = self.run_all_models('rf', num_features_rf)
+
+        if 'gb' in self.feature_indices:
+            num_features_gb = self.optimal_features.get('Gradient Boosting', 20)
+            results['gb'] = self.run_all_models('gb', num_features_gb)
+
+        if 'corr' in self.feature_indices:
+            results['corr'] = self.run_all_models('corr', 20)
+
+        print("\n" + "=" * 60)
+        print("ANALYSIS COMPLETE")
+        print("=" * 60)
+
+        return results
+
+
+def main() -> None:
+    """Main entry point for the housing analysis."""
+    analyzer = HousingAnalyzer()
+
+    try:
+        analyzer.run_complete_analysis()
+    except Exception as e:
+        print(f"Analysis failed: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
