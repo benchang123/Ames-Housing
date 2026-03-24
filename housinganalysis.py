@@ -49,6 +49,7 @@ class HousingAnalyzer:
         self.training_data: Optional[pd.DataFrame] = None
         self.test_data: Optional[pd.DataFrame] = None
         self.rich_neighborhoods: List[str] = []
+        self.label_encoders: Dict[str, Any] = {}
         self.feature_indices: Dict[str, np.ndarray] = {}
         self.feature_names: Dict[str, List[str]] = {}
         self.optimal_features: Dict[str, int] = {}
@@ -300,7 +301,7 @@ class HousingAnalyzer:
             self.training_data, 4)
         self.training_data = self.add_rich_neighborhood_flag(
             self.training_data, self.rich_neighborhoods)
-        self.training_data, _ = self.encode_categorical(self.training_data)
+        self.training_data, self.label_encoders = self.encode_categorical(self.training_data)
         print("Feature engineering completed")
 
     # ==================== Feature Importance ====================
@@ -495,19 +496,25 @@ class HousingAnalyzer:
         if self.LOG_TARGET:
             y = np.log1p(y)
 
-        num_cols = self.get_numeric_columns(X)
+        X = X.copy()
         if fitted_scaler is None:
-            # Training mode: fit and transform
-            scaler = preprocessing.StandardScaler()
-            X = X.copy()
-            X.loc[:, num_cols] = scaler.fit_transform(X.loc[:, num_cols])
+            # Training mode: encode first so num_cols matches what the scaler will see.
+            # If training_data was already encoded by apply_feature_engineering there are
+            # no object columns left; fall back to the saved label_encoders in that case.
             X, encoders = self.encode_categorical(X, fitted_encoders=None)
+            if not encoders and self.label_encoders:
+                encoders = self.label_encoders
+            num_cols = self.get_numeric_columns(X)
+            X[num_cols] = X[num_cols].astype(float)
+            scaler = preprocessing.StandardScaler()
+            X[num_cols] = scaler.fit_transform(X[num_cols])
         else:
-            # Test mode: only transform using pre-fitted objects
-            scaler = fitted_scaler
-            X = X.copy()
-            X.loc[:, num_cols] = scaler.transform(X.loc[:, num_cols])
-            X, encoders = self.encode_categorical(X, fitted_encoders=fitted_encoders)
+            # Test mode: encode first using the fitted encoders, then scale.
+            effective_encoders = fitted_encoders if fitted_encoders else self.label_encoders
+            X, _ = self.encode_categorical(X, fitted_encoders=effective_encoders)
+            num_cols = self.get_numeric_columns(X)
+            X[num_cols] = X[num_cols].astype(float)
+            X[num_cols] = fitted_scaler.transform(X[num_cols])
             scaler = None
             encoders = None
 
