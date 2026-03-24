@@ -14,6 +14,7 @@ from sklearn.model_selection import train_test_split, GridSearchCV, cross_valida
 from sklearn import linear_model as lm
 from sklearn import preprocessing
 from sklearn import metrics
+from sklearn.metrics import r2_score
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.exceptions import ConvergenceWarning
 from typing import Tuple, List, Optional, Dict, Any
@@ -34,6 +35,7 @@ class HousingAnalyzer:
     NA_THRESHOLD = 25  # Percentage threshold for dropping columns with NA
     OUTLIER_THRESHOLD = 4000  # Living area outlier threshold
     PLOTS_DIR = Path('plots')
+    LOG_TARGET = True  # Apply log1p transform to SalePrice before modeling
 
     def __init__(self, data_path: Optional[str] = None):
         """
@@ -256,15 +258,39 @@ class HousingAnalyzer:
         self._save_plot('rich_neighborhoods')
 
     @staticmethod
-    def encode_categorical(data: pd.DataFrame) -> pd.DataFrame:
-        """Label encode categorical columns."""
+    def encode_categorical(
+            data: pd.DataFrame,
+            fitted_encoders: Optional[Dict[str, Any]] = None
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Label encode categorical columns.
+
+        Args:
+            data: DataFrame to encode
+            fitted_encoders: Dict of pre-fitted LabelEncoders keyed by column
+                name. When None, fits new encoders (training mode).
+
+        Returns:
+            Tuple of (encoded DataFrame, dict of fitted encoders)
+        """
         result = data.copy()
         categorical_cols = result.select_dtypes(include=['object']).columns
+        encoders: Dict[str, Any] = {} if fitted_encoders is None else fitted_encoders
 
         for col in categorical_cols:
-            encoder = preprocessing.LabelEncoder()
-            result[col] = encoder.fit_transform(result[col].astype(str))
-        return result
+            if fitted_encoders is None:
+                encoder = preprocessing.LabelEncoder()
+                result[col] = encoder.fit_transform(result[col].astype(str))
+                encoders[col] = encoder
+            else:
+                encoder = fitted_encoders[col]
+                # Handle unseen categories by mapping to the last known class
+                known_classes = set(encoder.classes_)
+                result[col] = result[col].astype(str).apply(
+                    lambda x: x if x in known_classes else encoder.classes_[0]
+                )
+                result[col] = encoder.transform(result[col])
+        return result, encoders
 
     def apply_feature_engineering(self) -> None:
         """Apply all feature engineering steps to training data."""
@@ -274,7 +300,7 @@ class HousingAnalyzer:
             self.training_data, 4)
         self.training_data = self.add_rich_neighborhood_flag(
             self.training_data, self.rich_neighborhoods)
-        self.training_data = self.encode_categorical(self.training_data)
+        self.training_data, _ = self.encode_categorical(self.training_data)
         print("Feature engineering completed")
 
     # ==================== Feature Importance ====================
@@ -365,6 +391,8 @@ class HousingAnalyzer:
             cv_errors.append(
                 -np.mean(cv_results['test_neg_root_mean_squared_error']))
 
+        optimal = np.argmin(cv_errors) + 1
+
         plt.figure(figsize=(10, 7))
         plt.plot(
             range(1,
@@ -372,14 +400,13 @@ class HousingAnalyzer:
             train_errors,
             label="Training Error")
         plt.plot(range(1, len(cv_errors) + 1), cv_errors, label="CV Error")
+        plt.axvline(x=optimal, color='green', linestyle='--', label=f'Optimal: {optimal}')
         plt.legend()
         plt.xlabel("Number of Features")
         plt.ylabel("RMSE")
         plt.title(f'Feature Selection ({method_name})')
         self._save_plot(
             f'feature_selection_{method_name.lower().replace(" ", "_")}')
-
-        optimal = np.argmin(cv_errors) + 1
         self.optimal_features[method_name] = optimal
         print(f"Optimal features for {method_name}: {optimal}")
         return optimal
@@ -426,17 +453,28 @@ class HousingAnalyzer:
     # ==================== Modeling ====================
 
     def process_data_for_modeling(
-            self, data: pd.DataFrame,
-            feature_names: List[str]) -> Tuple[pd.DataFrame, pd.Series]:
+            self,
+            data: pd.DataFrame,
+            feature_names: List[str],
+            fitted_scaler: Optional[Any] = None,
+            fitted_encoders: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[pd.DataFrame, pd.Series, Any, Optional[Dict[str, Any]]]:
         """
         Process data for modeling: remove outliers, engineer features, scale, and encode.
-        
+
+        In training mode (fitted_scaler=None, fitted_encoders=None) the scaler and
+        encoders are fitted on the supplied data and returned so they can be reused
+        on the test set, avoiding data leakage.
+
         Args:
             data: Raw dataframe
             feature_names: List of feature column names to select
-            
+            fitted_scaler: Pre-fitted StandardScaler (None = training mode)
+            fitted_encoders: Pre-fitted LabelEncoder dict (None = training mode)
+
         Returns:
-            Tuple of (X features, y target)
+            Tuple of (X features, y target, scaler, encoders).
+            In test mode the returned scaler and encoders are None.
         """
         data = self.remove_outliers(data, 'Gr_Liv_Area', self.OUTLIER_THRESHOLD)
         data = self.add_total_bathrooms(data)
@@ -454,22 +492,37 @@ class HousingAnalyzer:
         X = data.drop(['SalePrice'], axis=1)
         y = data['SalePrice']
 
+        if self.LOG_TARGET:
+            y = np.log1p(y)
+
         num_cols = self.get_numeric_columns(X)
-        scaler = preprocessing.StandardScaler()
-        X.loc[:, num_cols] = scaler.fit_transform(X.loc[:, num_cols])
-        X = self.encode_categorical(X)
+        if fitted_scaler is None:
+            # Training mode: fit and transform
+            scaler = preprocessing.StandardScaler()
+            X = X.copy()
+            X.loc[:, num_cols] = scaler.fit_transform(X.loc[:, num_cols])
+            X, encoders = self.encode_categorical(X, fitted_encoders=None)
+        else:
+            # Test mode: only transform using pre-fitted objects
+            scaler = fitted_scaler
+            X = X.copy()
+            X.loc[:, num_cols] = scaler.transform(X.loc[:, num_cols])
+            X, encoders = self.encode_categorical(X, fitted_encoders=fitted_encoders)
+            scaler = None
+            encoders = None
+
         X = X.ffill().bfill()
 
-        return X, y
+        return X, y, scaler, encoders
 
     def run_ols(
             self, X_train: pd.DataFrame, y_train: pd.Series,
             X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
         """
         Run Ordinary Least Squares regression.
-        
+
         Returns:
-            Dictionary with training and test RMSE
+            Dictionary with training and test RMSE and R²
         """
         model = lm.LinearRegression()
         model.fit(X_train, y_train)
@@ -477,30 +530,48 @@ class HousingAnalyzer:
         y_pred_train = model.predict(X_train)
         y_pred_test = model.predict(X_test)
 
-        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
-        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+        # Back-transform if log target so RMSE is in original dollar units
+        if self.LOG_TARGET:
+            y_pred_train_orig = np.expm1(y_pred_train)
+            y_train_orig = np.expm1(y_train)
+            y_pred_test_orig = np.expm1(y_pred_test)
+            y_test_orig = np.expm1(y_test)
+        else:
+            y_pred_train_orig = y_pred_train
+            y_train_orig = y_train
+            y_pred_test_orig = y_pred_test
+            y_test_orig = y_test
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train_orig, y_pred_train_orig))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test_orig, y_pred_test_orig))
+        train_r2 = r2_score(y_train_orig, y_pred_train_orig)
+        test_r2 = r2_score(y_test_orig, y_pred_test_orig)
 
         print(
             f'OLS - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
         )
+        print(f'OLS - Training R²: {train_r2:.4f}, Test R²: {test_r2:.4f}')
+
+        price_min = min(y_train_orig.min(), y_test_orig.min())
+        price_max = max(y_train_orig.max(), y_test_orig.max())
 
         # Prediction vs Actual plot
         fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
-        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
-        axes[0].plot([0, 600000], [0, 600000], 'r-', label="Perfect Prediction")
+        axes[0].scatter(y_pred_train_orig, y_train_orig, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test_orig, y_test_orig, alpha=0.5, label="Test")
+        axes[0].plot([price_min, price_max], [price_min, price_max], 'r-', label="Perfect Prediction")
         axes[0].set_xlabel('Predicted Sales Price')
         axes[0].set_ylabel('Actual Sales Price')
         axes[0].set_title('OLS: Predicted vs Actual')
         axes[0].legend()
 
         # Residual plot
-        train_residuals = y_train - y_pred_train
-        test_residuals = y_test - y_pred_test
+        train_residuals = y_train_orig - y_pred_train_orig
+        test_residuals = y_test_orig - y_pred_test_orig
         axes[1].scatter(
-            y_pred_train, train_residuals, alpha=0.5, label="Training")
-        axes[1].scatter(y_pred_test, test_residuals, alpha=0.5, label="Test")
+            y_pred_train_orig, train_residuals, alpha=0.5, label="Training")
+        axes[1].scatter(y_pred_test_orig, test_residuals, alpha=0.5, label="Test")
         axes[1].axhline(y=0, color='r', linestyle='-')
         axes[1].set_xlabel('Predicted Sales Price')
         axes[1].set_ylabel('Residual')
@@ -510,7 +581,12 @@ class HousingAnalyzer:
         plt.tight_layout()
         self._save_plot('ols_results')
 
-        return {'train_rmse': train_rmse, 'test_rmse': test_rmse}
+        return {
+            'train_rmse': train_rmse,
+            'test_rmse': test_rmse,
+            'train_r2': train_r2,
+            'test_r2': test_r2,
+        }
 
     def run_ridge(
             self, X_train: pd.DataFrame, y_train: pd.Series,
@@ -550,19 +626,37 @@ class HousingAnalyzer:
         y_pred_train = fine_search.predict(X_train)
         y_pred_test = fine_search.predict(X_test)
 
-        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
-        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+        # Back-transform if log target so RMSE is in original dollar units
+        if self.LOG_TARGET:
+            y_pred_train_orig = np.expm1(y_pred_train)
+            y_train_orig = np.expm1(y_train)
+            y_pred_test_orig = np.expm1(y_pred_test)
+            y_test_orig = np.expm1(y_test)
+        else:
+            y_pred_train_orig = y_pred_train
+            y_train_orig = y_train
+            y_pred_test_orig = y_pred_test
+            y_test_orig = y_test
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train_orig, y_pred_train_orig))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test_orig, y_pred_test_orig))
+        train_r2 = r2_score(y_train_orig, y_pred_train_orig)
+        test_r2 = r2_score(y_test_orig, y_pred_test_orig)
         print(
             f'Ridge - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
         )
+        print(f'Ridge - Training R²: {train_r2:.4f}, Test R²: {test_r2:.4f}')
+
+        price_min = min(y_train_orig.min(), y_test_orig.min())
+        price_max = max(y_train_orig.max(), y_test_orig.max())
 
         # Plots
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
         # Prediction vs Actual
-        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
-        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
-        axes[0].plot([0, 600000], [0, 600000], 'r-')
+        axes[0].scatter(y_pred_train_orig, y_train_orig, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test_orig, y_test_orig, alpha=0.5, label="Test")
+        axes[0].plot([price_min, price_max], [price_min, price_max], 'r-')
         axes[0].set_xlabel('Predicted Sales Price')
         axes[0].set_ylabel('Actual Sales Price')
         axes[0].set_title('Ridge: Predicted vs Actual')
@@ -570,9 +664,9 @@ class HousingAnalyzer:
 
         # Residuals
         axes[1].scatter(
-            y_pred_train, y_train - y_pred_train, alpha=0.5, label="Training")
+            y_pred_train_orig, y_train_orig - y_pred_train_orig, alpha=0.5, label="Training")
         axes[1].scatter(
-            y_pred_test, y_test - y_pred_test, alpha=0.5, label="Test")
+            y_pred_test_orig, y_test_orig - y_pred_test_orig, alpha=0.5, label="Test")
         axes[1].axhline(y=0, color='r', linestyle='-')
         axes[1].set_xlabel('Predicted Sales Price')
         axes[1].set_ylabel('Residual')
@@ -597,7 +691,9 @@ class HousingAnalyzer:
         return {
             'best_alpha': best_alpha,
             'train_rmse': train_rmse,
-            'test_rmse': test_rmse
+            'test_rmse': test_rmse,
+            'train_r2': train_r2,
+            'test_r2': test_r2,
         }
 
     def run_lasso(
@@ -640,19 +736,37 @@ class HousingAnalyzer:
         y_pred_train = fine_search.predict(X_train)
         y_pred_test = fine_search.predict(X_test)
 
-        train_rmse = np.sqrt(metrics.mean_squared_error(y_train, y_pred_train))
-        test_rmse = np.sqrt(metrics.mean_squared_error(y_test, y_pred_test))
+        # Back-transform if log target so RMSE is in original dollar units
+        if self.LOG_TARGET:
+            y_pred_train_orig = np.expm1(y_pred_train)
+            y_train_orig = np.expm1(y_train)
+            y_pred_test_orig = np.expm1(y_pred_test)
+            y_test_orig = np.expm1(y_test)
+        else:
+            y_pred_train_orig = y_pred_train
+            y_train_orig = y_train
+            y_pred_test_orig = y_pred_test
+            y_test_orig = y_test
+
+        train_rmse = np.sqrt(metrics.mean_squared_error(y_train_orig, y_pred_train_orig))
+        test_rmse = np.sqrt(metrics.mean_squared_error(y_test_orig, y_pred_test_orig))
+        train_r2 = r2_score(y_train_orig, y_pred_train_orig)
+        test_r2 = r2_score(y_test_orig, y_pred_test_orig)
         print(
             f'LASSO - Training RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}'
         )
+        print(f'LASSO - Training R²: {train_r2:.4f}, Test R²: {test_r2:.4f}')
+
+        price_min = min(y_train_orig.min(), y_test_orig.min())
+        price_max = max(y_train_orig.max(), y_test_orig.max())
 
         # Plots
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
         # Prediction vs Actual
-        axes[0].scatter(y_pred_train, y_train, alpha=0.5, label="Training")
-        axes[0].scatter(y_pred_test, y_test, alpha=0.5, label="Test")
-        axes[0].plot([0, 600000], [0, 600000], 'r-')
+        axes[0].scatter(y_pred_train_orig, y_train_orig, alpha=0.5, label="Training")
+        axes[0].scatter(y_pred_test_orig, y_test_orig, alpha=0.5, label="Test")
+        axes[0].plot([price_min, price_max], [price_min, price_max], 'r-')
         axes[0].set_xlabel('Predicted Sales Price')
         axes[0].set_ylabel('Actual Sales Price')
         axes[0].set_title('LASSO: Predicted vs Actual')
@@ -660,9 +774,9 @@ class HousingAnalyzer:
 
         # Residuals
         axes[1].scatter(
-            y_pred_train, y_train - y_pred_train, alpha=0.5, label="Training")
+            y_pred_train_orig, y_train_orig - y_pred_train_orig, alpha=0.5, label="Training")
         axes[1].scatter(
-            y_pred_test, y_test - y_pred_test, alpha=0.5, label="Test")
+            y_pred_test_orig, y_test_orig - y_pred_test_orig, alpha=0.5, label="Test")
         axes[1].axhline(y=0, color='r', linestyle='-')
         axes[1].set_xlabel('Predicted Sales Price')
         axes[1].set_ylabel('Residual')
@@ -687,7 +801,9 @@ class HousingAnalyzer:
         return {
             'best_alpha': best_alpha,
             'train_rmse': train_rmse,
-            'test_rmse': test_rmse
+            'test_rmse': test_rmse,
+            'train_r2': train_r2,
+            'test_r2': test_r2,
         }
 
     def run_all_models(self, method: str, num_features: int) -> Dict[str, Dict]:
@@ -709,14 +825,17 @@ class HousingAnalyzer:
         # Use feature names instead of indices for consistent column selection
         selected_features = self.feature_names[method][:num_features]
 
-        # Reload and prepare data
+        # Reload and prepare data — fit scaler/encoders on train only, then
+        # apply the same fitted objects to test to avoid leakage.
         train_data = self.training_data.copy()
         test_data = self.test_data.copy()
 
-        X_train, y_train = self.process_data_for_modeling(
+        X_train, y_train, fitted_scaler, fitted_encoders = self.process_data_for_modeling(
             train_data, selected_features)
-        X_test, y_test = self.process_data_for_modeling(
-            test_data, selected_features)
+        X_test, y_test, _, _ = self.process_data_for_modeling(
+            test_data, selected_features,
+            fitted_scaler=fitted_scaler,
+            fitted_encoders=fitted_encoders)
 
         # OLS Summary
         X_train_const = sm.add_constant(X_train)
@@ -734,6 +853,21 @@ class HousingAnalyzer:
             'ridge': self.run_ridge(X_train, y_train, X_test, y_test),
             'lasso': self.run_lasso(X_train, y_train, X_test, y_test)
         }
+
+        # Model comparison summary table
+        print(f"\n{'='*60}")
+        print("MODEL COMPARISON SUMMARY")
+        print(f"{'='*60}")
+        header = f"{'Model':<12} {'Train RMSE':>12} {'Test RMSE':>12} {'Test R²':>10}"
+        print(header)
+        print('-' * len(header))
+        for model_name, res in [('OLS', results['ols']),
+                                 ('Ridge', results['ridge']),
+                                 ('LASSO', results['lasso'])]:
+            print(
+                f"{model_name:<12} {res['train_rmse']:>12.2f} {res['test_rmse']:>12.2f} {res['test_r2']:>10.4f}"
+            )
+        print(f"{'='*60}\n")
 
         return results
 
