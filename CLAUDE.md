@@ -50,11 +50,13 @@ The entire codebase is a single file (`housinganalysis.py`) organized around the
 
 **Important data flow detail**: `run_eda` mutates `self.training_data` by dropping high-NA columns and outlier rows. `run_feature_analysis` further mutates it with engineered features and encoding. `run_all_models` does NOT use this already-encoded `self.training_data` directly — it reloads a copy and re-applies feature engineering and scaling via `process_data_for_modeling`. The test set (`self.test_data`) is only touched during `run_all_models`.
 
-**Plot output**: All plots are saved to the `plots/` directory with a sequential numeric prefix (e.g., `01_sales_by_year.png`). The counter increments globally across the session, so running partial pipelines will pick up numbering where it left off.
+**Plot output**: All plots are saved to `plots/` relative to the script file (`Path(__file__).parent / 'plots'`), so they always land in the repo directory regardless of where the script is invoked from. Files are named with a sequential numeric prefix (e.g., `01_sales_by_year.png`). The counter increments globally across the session, so running partial pipelines will pick up numbering where it left off.
 
 ## Key Data Details
 
 - Dataset: 2,930 observations, 82 variables (`ames.csv`)
 - Target variable: `SalePrice`
+- Log transform: `LOG_TARGET = True` applies `log1p` to sale prices before modeling; predictions are back-transformed via `expm1` for final RMSE reporting in original dollar units
 - `rich_neighborhoods` is derived from top-4 neighborhoods by average training-set sale price and stored on the instance — it must be computed before `run_all_models` is called, since `process_data_for_modeling` uses `self.rich_neighborhoods` to apply the neighborhood flag to the test set.
 - `codebook.txt` contains descriptions of all 82 variables.
+- Default data source: remote GitHub URL. Override with `data_path` parameter for local CSV.

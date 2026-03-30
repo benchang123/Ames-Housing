@@ -34,7 +34,7 @@ class HousingAnalyzer:
     TEST_SIZE = 0.2
     NA_THRESHOLD = 25  # Percentage threshold for dropping columns with NA
     OUTLIER_THRESHOLD = 4000  # Living area outlier threshold
-    PLOTS_DIR = Path('plots')
+    PLOTS_DIR = Path(__file__).parent / 'plots'
     LOG_TARGET = True  # Apply log1p transform to SalePrice before modeling
 
     def __init__(self, data_path: Optional[str] = None):
@@ -56,16 +56,53 @@ class HousingAnalyzer:
         self.plot_counter: int = 0
         self.PLOTS_DIR.mkdir(exist_ok=True)
 
-    def _save_plot(self, name: str) -> None:
-        """Save current plot to file and close it."""
+    def _save_plot(self, name: str) -> Path:
+        """Save the current matplotlib figure to a numbered PNG file and close it.
+
+        The filename is constructed from the instance-level ``plot_counter`` (zero-
+        padded to two digits) and the supplied *name*, e.g. ``03_correlations.png``.
+        The counter is incremented before each save so that files sort in the order
+        they were produced.
+
+        Args:
+            name: Descriptive suffix used in the filename (spaces are allowed but
+                underscores are conventional).
+
+        Returns:
+            The :class:`~pathlib.Path` of the saved file.
+
+        Example:
+            >>> analyzer = HousingAnalyzer()
+            >>> import matplotlib.pyplot as plt
+            >>> plt.figure()
+            >>> plt.plot([1, 2], [3, 4])
+            >>> path = analyzer._save_plot('my_chart')
+            >>> path.suffix
+            '.png'
+        """
         self.plot_counter += 1
         filename = self.PLOTS_DIR / f"{self.plot_counter:02d}_{name}.png"
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"Saved: {filename}")
+        return filename
 
     def load_data(self) -> None:
-        """Load housing data from CSV file or URL."""
+        """Load housing data from a CSV file path or the remote GitHub URL.
+
+        When ``self.data_path`` is set the local file is read; otherwise the
+        class-level ``DATA_URL`` constant is used.  The resulting DataFrame is
+        stored on ``self.full_data``.
+
+        Raises:
+            FileNotFoundError: If ``data_path`` is set but the file does not exist.
+            ValueError: If the CSV cannot be parsed as a valid DataFrame.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            Loaded 2930 records with 82 features
+        """
         source = self.data_path if self.data_path else self.DATA_URL
         self.full_data = pd.read_csv(source)
         print(
@@ -73,7 +110,22 @@ class HousingAnalyzer:
         )
 
     def split_data(self) -> None:
-        """Split data into training and test sets."""
+        """Split ``self.full_data`` into stratified training and held-out test sets.
+
+        Uses ``RANDOM_STATE`` and ``TEST_SIZE`` class constants so results are
+        reproducible.  The resulting subsets are assigned to ``self.training_data``
+        and ``self.test_data`` respectively.
+
+        Raises:
+            ValueError: If :meth:`load_data` has not been called yet (i.e.
+                ``self.full_data`` is ``None``).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            Training set: 2344, Test set: 586
+        """
         if self.full_data is None:
             raise ValueError("Data must be loaded first. Call load_data()")
         self.training_data, self.test_data = train_test_split(
@@ -87,7 +139,29 @@ class HousingAnalyzer:
     # ==================== EDA Methods ====================
 
     def remove_high_na_columns(self) -> pd.Series:
-        """Remove columns with NA percentage above threshold."""
+        """Drop columns whose missing-value rate exceeds ``NA_THRESHOLD`` percent.
+
+        The same columns are removed from both ``self.training_data`` and
+        ``self.full_data`` (if present) so that the two DataFrames stay in sync.
+        Columns are identified using the *training* set only to avoid leaking test
+        information.
+
+        Returns:
+            A :class:`~pandas.Series` mapping each dropped column name to its NA
+            percentage, sorted descending.
+
+        Raises:
+            ValueError: If :meth:`split_data` has not been called yet (i.e.
+                ``self.training_data`` is ``None``).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> dropped = analyzer.remove_high_na_columns()
+            >>> list(dropped.index)  # doctest: +SKIP
+            ['Pool_QC', 'Misc_Feature', 'Alley', ...]
+        """
         if self.training_data is None:
             raise ValueError("Data must be split first. Call split_data()")
 
@@ -108,7 +182,18 @@ class HousingAnalyzer:
         return high_na
 
     def analyze_sales_by_year(self) -> None:
-        """Plot number of houses sold per year."""
+        """Plot the number of houses sold in each calendar year as a bar chart.
+
+        Groups ``self.training_data`` by the ``Yr_Sold`` column and counts
+        observations per year.  The resulting figure is saved via
+        :meth:`_save_plot`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.analyze_sales_by_year()  # doctest: +SKIP
+        """
         self.training_data.groupby('Yr_Sold').count()['Order'].plot(kind='bar')
         plt.title('Houses Sold by Year')
         plt.xlabel('Year')
@@ -116,12 +201,39 @@ class HousingAnalyzer:
         self._save_plot('sales_by_year')
 
     def analyze_living_area_vs_price(self) -> None:
-        """Create joint plot of living area vs sale price."""
+        """Create a seaborn joint plot of above-grade living area vs. sale price.
+
+        Displays a scatter plot with marginal histograms, saved via
+        :meth:`_save_plot`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.analyze_living_area_vs_price()  # doctest: +SKIP
+        """
         sns.jointplot(x='Gr_Liv_Area', y='SalePrice', data=self.training_data)
         self._save_plot('living_area_vs_price')
 
     def get_price_statistics(self) -> Tuple[float, float, Tuple[float, float]]:
-        """Calculate sale price statistics."""
+        """Compute descriptive statistics for the ``SalePrice`` column.
+
+        Calculates the mean, standard deviation, and the symmetric ±2 SD range
+        from ``self.training_data`` and prints a formatted summary.
+
+        Returns:
+            A three-element tuple ``(mean_price, std_price, price_range)`` where
+            ``price_range`` is itself a ``(lower, upper)`` float tuple representing
+            the ±2 standard-deviation band around the mean.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> mean, std, (lo, hi) = analyzer.get_price_statistics()
+            >>> mean > 0
+            True
+        """
         mean_price = np.mean(self.training_data['SalePrice'])
         std_price = np.std(self.training_data['SalePrice'])
         price_range = (mean_price - 2 * std_price, mean_price + 2 * std_price)
@@ -132,7 +244,17 @@ class HousingAnalyzer:
         return mean_price, std_price, price_range
 
     def plot_price_distribution(self) -> None:
-        """Plot sale price distribution."""
+        """Plot the empirical distribution of sale prices as a histogram.
+
+        Uses seaborn's ``histplot`` on ``self.training_data['SalePrice']`` and
+        saves the figure via :meth:`_save_plot`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.plot_price_distribution()  # doctest: +SKIP
+        """
         plt.figure(figsize=(10, 5))
         sns.histplot(data=self.training_data, x='SalePrice')
         plt.xlabel("Sales Price")
@@ -143,11 +265,41 @@ class HousingAnalyzer:
     @staticmethod
     def remove_outliers(
             data: pd.DataFrame, variable: str, upper: float) -> pd.DataFrame:
-        """Remove outliers above a threshold."""
+        """Return a copy of *data* with rows where *variable* >= *upper* removed.
+
+        Args:
+            data: Source DataFrame; must contain *variable* as a column.
+            variable: Name of the numeric column used for the outlier filter.
+            upper: Exclusive upper bound — rows with ``data[variable] >= upper``
+                are dropped.
+
+        Returns:
+            A filtered copy of *data* (original is not modified).
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({'x': [100, 5000, 200], 'y': [1, 2, 3]})
+            >>> HousingAnalyzer.remove_outliers(df, 'x', 4000)
+               x  y
+            0  100  1
+            2  200  3
+        """
         return data.loc[data[variable] < upper, :].copy()
 
     def remove_living_area_outliers(self) -> None:
-        """Remove living area outliers from training data."""
+        """Remove rows from ``self.training_data`` where ``Gr_Liv_Area`` exceeds the threshold.
+
+        Uses ``OUTLIER_THRESHOLD`` (default 4000 sq ft) as the exclusive upper bound.
+        Prints the number of rows removed along with their living area and sale price.
+        Only the training split is modified; the test set is left untouched.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.remove_living_area_outliers()  # doctest: +SKIP
+            Removing 2 outliers with Gr_Liv_Area > 4000
+        """
         outliers = self.training_data.loc[self.training_data['Gr_Liv_Area'] >
                                           self.OUTLIER_THRESHOLD,
                                           ['Gr_Liv_Area', 'SalePrice']]
@@ -158,7 +310,17 @@ class HousingAnalyzer:
             self.training_data, 'Gr_Liv_Area', self.OUTLIER_THRESHOLD)
 
     def plot_neighborhood_distribution(self) -> None:
-        """Plot neighborhood distribution."""
+        """Plot the count of training-set houses per neighborhood as a bar chart.
+
+        Neighborhoods are sorted by frequency in descending order.  The figure is
+        saved via :meth:`_save_plot`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.plot_neighborhood_distribution()  # doctest: +SKIP
+        """
         self.training_data.groupby('Neighborhood').size().sort_values(
             ascending=False).plot(kind='bar')
         plt.title('Houses by Neighborhood')
@@ -168,12 +330,44 @@ class HousingAnalyzer:
         self._save_plot('neighborhood_distribution')
 
     def get_numeric_columns(self, data: pd.DataFrame) -> pd.Index:
-        """Get numeric column names from dataframe."""
+        """Return the column names in *data* that have an ``int64`` or ``float64`` dtype.
+
+        Args:
+            data: DataFrame to inspect.
+
+        Returns:
+            A :class:`~pandas.Index` of column names whose dtype is either
+            ``int64`` or ``float64``.
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({'a': [1, 2], 'b': ['x', 'y'], 'c': [1.5, 2.5]})
+            >>> analyzer = HousingAnalyzer()
+            >>> list(analyzer.get_numeric_columns(df))
+            ['a', 'c']
+        """
         return data.dtypes[(data.dtypes == 'int64') |
                            (data.dtypes == 'float64')].index
 
     def analyze_correlations(self) -> pd.Series:
-        """Analyze correlations with sale price."""
+        """Compute and plot Pearson correlations between numeric features and ``SalePrice``.
+
+        Only numeric (int64 / float64) columns are considered.  A horizontal bar chart
+        of all feature correlations is saved via :meth:`_save_plot`.
+
+        Returns:
+            A :class:`~pandas.Series` of Pearson correlation coefficients with
+            ``SalePrice``, sorted in descending order, with ``SalePrice`` itself
+            excluded.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> corr = analyzer.analyze_correlations()
+            >>> corr.index[0]  # highest-correlated feature  # doctest: +SKIP
+            'Overall_Qual'
+        """
         num_cols = self.get_numeric_columns(self.training_data)
         corr_df = self.training_data.loc[:, num_cols].corr()
         sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
@@ -191,7 +385,22 @@ class HousingAnalyzer:
 
     def plot_feature_vs_price(
             self, feature: str, add_jitter: bool = True) -> None:
-        """Plot a feature against sale price with optional jitter."""
+        """Scatter-plot a single feature against ``SalePrice``, with optional jitter.
+
+        Jitter (Gaussian noise with ``std=0.5``) is added to the feature axis to
+        reveal overlapping points when the column contains discrete values.
+
+        Args:
+            feature: Column name in ``self.training_data`` to plot on the x-axis.
+            add_jitter: When ``True`` (default), add Gaussian noise to the feature
+                values before plotting to separate overlapping points.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.plot_feature_vs_price('Overall_Qual')  # doctest: +SKIP
+        """
         data = self.training_data.copy()
         if add_jitter:
             noise = np.random.normal(0, 0.5, len(data))
@@ -206,14 +415,26 @@ class HousingAnalyzer:
 
     @staticmethod
     def add_total_bathrooms(data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add total bathrooms feature combining full and half baths.
-        
+        """Add a ``TotalBathrooms`` column that combines full and half bathrooms.
+
+        Full bathrooms (basement and above-grade) count as 1.0 each; half
+        bathrooms count as 0.5.  Missing values in any bathroom column are
+        treated as 0 before summing.
+
         Args:
-            data: DataFrame with bathroom columns
-            
+            data: DataFrame containing ``Bsmt_Full_Bath``, ``Full_Bath``,
+                ``Bsmt_Half_Bath``, and ``Half_Bath`` columns.
+
         Returns:
-            DataFrame with TotalBathrooms column added
+            A copy of *data* with the ``TotalBathrooms`` column appended.
+
+        Example:
+            >>> import pandas as pd
+            >>> row = {'Bsmt_Full_Bath': 1, 'Full_Bath': 1,
+            ...        'Bsmt_Half_Bath': 0, 'Half_Bath': 1}
+            >>> df = pd.DataFrame([row])
+            >>> HousingAnalyzer.add_total_bathrooms(df)['TotalBathrooms'].iloc[0]
+            2.5
         """
         result = data.copy()
         bath_vars = [
@@ -225,28 +446,87 @@ class HousingAnalyzer:
 
     @staticmethod
     def add_total_sf(data: pd.DataFrame) -> pd.DataFrame:
-        """Add total square footage feature."""
+        """Add a ``Total_SF`` column equal to basement plus above-grade living area.
+
+        Args:
+            data: DataFrame containing ``Total_Bsmt_SF`` and ``Gr_Liv_Area``
+                columns.
+
+        Returns:
+            A copy of *data* with the ``Total_SF`` column appended.
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({'Total_Bsmt_SF': [800], 'Gr_Liv_Area': [1200]})
+            >>> HousingAnalyzer.add_total_sf(df)['Total_SF'].iloc[0]
+            2000
+        """
         result = data.copy()
         result['Total_SF'] = result['Total_Bsmt_SF'] + result['Gr_Liv_Area']
         return result
 
     @staticmethod
     def find_rich_neighborhoods(data: pd.DataFrame, n: int = 3) -> List[str]:
-        """Find top n neighborhoods by average sale price."""
+        """Return the names of the top *n* neighborhoods by mean ``SalePrice``.
+
+        Args:
+            data: DataFrame containing ``Neighborhood`` and ``SalePrice`` columns.
+            n: Number of top neighborhoods to return (default ``3``).
+
+        Returns:
+            A list of *n* neighborhood name strings sorted by descending mean
+            sale price.
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({
+            ...     'Neighborhood': ['A', 'A', 'B', 'B', 'C'],
+            ...     'SalePrice':    [300, 400, 100, 150, 500],
+            ... })
+            >>> HousingAnalyzer.find_rich_neighborhoods(df, n=2)
+            ['C', 'A']
+        """
         return data.groupby('Neighborhood')['SalePrice'].mean().sort_values(
             ascending=False).iloc[:n].index.tolist()
 
     @staticmethod
     def add_rich_neighborhood_flag(
             data: pd.DataFrame, neighborhoods: List[str]) -> pd.DataFrame:
-        """Add binary flag for rich neighborhoods."""
+        """Add a binary ``in_rich_neighborhood`` indicator column.
+
+        Args:
+            data: DataFrame containing a ``Neighborhood`` column.
+            neighborhoods: List of neighborhood names considered "rich"
+                (typically produced by :meth:`find_rich_neighborhoods`).
+
+        Returns:
+            A copy of *data* with ``in_rich_neighborhood`` appended — ``1`` when
+            the row's neighborhood is in *neighborhoods*, ``0`` otherwise.
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({'Neighborhood': ['NridgHt', 'OldTown', 'NridgHt']})
+            >>> result = HousingAnalyzer.add_rich_neighborhood_flag(df, ['NridgHt'])
+            >>> list(result['in_rich_neighborhood'])
+            [1, 0, 1]
+        """
         result = data.copy()
         result['in_rich_neighborhood'] = result['Neighborhood'].isin(
             neighborhoods).astype(int)
         return result
 
     def plot_rich_neighborhoods(self, n: int = 20) -> None:
-        """Plot top neighborhoods by average sale price."""
+        """Plot the top *n* neighborhoods ranked by average sale price.
+
+        Args:
+            n: Number of neighborhoods to include in the chart (default ``20``).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.plot_rich_neighborhoods(n=10)  # doctest: +SKIP
+        """
         rich_hoods = self.training_data.groupby(
             'Neighborhood')['SalePrice'].mean().sort_values(
                 ascending=False).iloc[:n]
@@ -263,16 +543,42 @@ class HousingAnalyzer:
             data: pd.DataFrame,
             fitted_encoders: Optional[Dict[str, Any]] = None
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """
-        Label encode categorical columns.
+        """Label-encode every ``object``-dtype column in *data*.
+
+        In **training mode** (``fitted_encoders=None``) a fresh
+        :class:`~sklearn.preprocessing.LabelEncoder` is fitted for each
+        categorical column and the fitted encoders are returned so they can be
+        reused on the test set.
+
+        In **inference/test mode** (``fitted_encoders`` supplied) the existing
+        encoders are used to transform the column values.  Any value that was not
+        seen during training is mapped to the first known class
+        (``encoder.classes_[0]``) to avoid ``ValueError``.
 
         Args:
-            data: DataFrame to encode
-            fitted_encoders: Dict of pre-fitted LabelEncoders keyed by column
-                name. When None, fits new encoders (training mode).
+            data: DataFrame whose ``object``-typed columns will be encoded in
+                place on a copy.
+            fitted_encoders: Dict mapping column name to a pre-fitted
+                :class:`~sklearn.preprocessing.LabelEncoder`.  Pass ``None`` to
+                fit new encoders (training mode).
 
         Returns:
-            Tuple of (encoded DataFrame, dict of fitted encoders)
+            A tuple ``(encoded_df, encoders)`` where *encoded_df* is a copy of
+            *data* with all categorical columns replaced by integer codes, and
+            *encoders* is the dict of fitted
+            :class:`~sklearn.preprocessing.LabelEncoder` instances (same object
+            as *fitted_encoders* when in test mode).
+
+        Raises:
+            KeyError: If *fitted_encoders* is provided but does not contain an
+                encoder for a categorical column present in *data*.
+
+        Example:
+            >>> import pandas as pd
+            >>> df = pd.DataFrame({'color': ['red', 'blue', 'red']})
+            >>> encoded, encoders = HousingAnalyzer.encode_categorical(df)
+            >>> list(encoded['color'])
+            [1, 0, 1]
         """
         result = data.copy()
         categorical_cols = result.select_dtypes(include=['object']).columns
@@ -294,7 +600,30 @@ class HousingAnalyzer:
         return result, encoders
 
     def apply_feature_engineering(self) -> None:
-        """Apply all feature engineering steps to training data."""
+        """Apply the full feature engineering pipeline to ``self.training_data`` in place.
+
+        The following transformations are applied sequentially:
+
+        1. Add ``TotalBathrooms`` via :meth:`add_total_bathrooms`.
+        2. Add ``Total_SF`` via :meth:`add_total_sf`.
+        3. Derive ``self.rich_neighborhoods`` (top-4 by avg price) via
+           :meth:`find_rich_neighborhoods` and add ``in_rich_neighborhood`` flag.
+        4. Label-encode all ``object``-dtype columns via :meth:`encode_categorical`;
+           the fitted encoders are stored on ``self.label_encoders``.
+
+        Note:
+            This method mutates ``self.training_data`` and sets
+            ``self.rich_neighborhoods`` and ``self.label_encoders``.  It must be
+            called *after* :meth:`remove_high_na_columns` and *before*
+            :meth:`run_all_models`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            Feature engineering completed
+        """
         self.training_data = self.add_total_bathrooms(self.training_data)
         self.training_data = self.add_total_sf(self.training_data)
         self.rich_neighborhoods = self.find_rich_neighborhoods(
@@ -307,7 +636,25 @@ class HousingAnalyzer:
     # ==================== Feature Importance ====================
 
     def prepare_features_target(self) -> Tuple[pd.DataFrame, pd.Series]:
-        """Prepare feature matrix X and target vector y."""
+        """Separate ``self.training_data`` into a feature matrix *X* and target *y*.
+
+        Numeric columns in *X* have their missing values filled with the column
+        mean; any remaining NaNs are then filled forward then backward.
+
+        Returns:
+            A tuple ``(X, y)`` where *X* is a :class:`~pandas.DataFrame` of all
+            columns except ``SalePrice`` and *y* is the ``SalePrice``
+            :class:`~pandas.Series`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data()
+            >>> analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> X, y = analyzer.prepare_features_target()
+            >>> 'SalePrice' not in X.columns
+            True
+        """
         X = self.training_data.drop(columns=['SalePrice'])
         y = self.training_data['SalePrice']
 
@@ -320,7 +667,31 @@ class HousingAnalyzer:
 
     def compute_feature_importance_rf(
             self, X: pd.DataFrame, y: pd.Series) -> np.ndarray:
-        """Compute feature importance using Random Forest."""
+        """Fit a Random Forest and compute feature importances.
+
+        Trains a 100-tree :class:`~sklearn.ensemble.RandomForestRegressor` on
+        (*X*, *y*), records the resulting importances, and saves a bar-chart via
+        :meth:`_save_plot`.  The sorted index array and corresponding column name
+        list are stored in ``self.feature_indices['rf']`` and
+        ``self.feature_names['rf']`` respectively.
+
+        Args:
+            X: Feature matrix (should already be fully numeric / encoded).
+            y: Target vector (``SalePrice``).
+
+        Returns:
+            A 1-D :class:`~numpy.ndarray` of column indices sorted by descending
+            feature importance.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> X, y = analyzer.prepare_features_target()
+            >>> idx = analyzer.compute_feature_importance_rf(X, y)
+            >>> idx.shape[0] == X.shape[1]
+            True
+        """
         clf = RandomForestRegressor(
             n_estimators=100, random_state=self.RANDOM_STATE, n_jobs=-1)
         clf.fit(X, y)
@@ -343,7 +714,31 @@ class HousingAnalyzer:
 
     def compute_feature_importance_gb(
             self, X: pd.DataFrame, y: pd.Series) -> np.ndarray:
-        """Compute feature importance using Gradient Boosting."""
+        """Fit a Gradient Boosting regressor and compute feature importances.
+
+        Trains a 100-estimator
+        :class:`~sklearn.ensemble.GradientBoostingRegressor` on (*X*, *y*),
+        records the resulting importances, and saves a bar-chart via
+        :meth:`_save_plot`.  Results are stored in ``self.feature_indices['gb']``
+        and ``self.feature_names['gb']``.
+
+        Args:
+            X: Feature matrix (should already be fully numeric / encoded).
+            y: Target vector (``SalePrice``).
+
+        Returns:
+            A 1-D :class:`~numpy.ndarray` of column indices sorted by descending
+            feature importance.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> X, y = analyzer.prepare_features_target()
+            >>> idx = analyzer.compute_feature_importance_gb(X, y)
+            >>> idx.shape[0] == X.shape[1]
+            True
+        """
         clf = GradientBoostingRegressor(
             n_estimators=100, random_state=self.RANDOM_STATE, verbose=0)
         clf.fit(X, y)
@@ -372,7 +767,41 @@ class HousingAnalyzer:
             method_name: str,
             max_features: int = 79,
             cv: int = 5) -> int:
-        """Find optimal number of features using cross-validation."""
+        """Identify the feature count that minimises cross-validated RMSE.
+
+        Iterates from 1 to ``min(max_features, len(feature_idx))`` features
+        (selected in *feature_idx* order), fits a plain
+        :class:`~sklearn.linear_model.LinearRegression` with *cv*-fold cross-
+        validation at each size, and returns the count that achieves the lowest
+        mean CV RMSE.  A learning-curve figure is saved via :meth:`_save_plot`.
+        The result is stored in ``self.optimal_features[method_name]``.
+
+        Args:
+            X: Feature matrix; columns are referenced by position via
+                *feature_idx*.
+            y: Target vector.
+            feature_idx: 1-D array of column indices sorted by descending
+                importance (output of :meth:`compute_feature_importance_rf` or
+                similar).
+            method_name: Human-readable label used in plot title and as the key
+                in ``self.optimal_features``.
+            max_features: Hard upper limit on the number of features to evaluate
+                (default ``79``).
+            cv: Number of cross-validation folds (default ``5``).
+
+        Returns:
+            The optimal number of features as an integer.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> X, y = analyzer.prepare_features_target()
+            >>> idx = analyzer.compute_feature_importance_rf(X, y)
+            >>> n = analyzer.find_optimal_features(X, y, idx, 'RF', max_features=10)
+            >>> 1 <= n <= 10
+            True
+        """
         train_errors, cv_errors = [], []
 
         for i in range(1, min(max_features, len(feature_idx))):
@@ -413,7 +842,27 @@ class HousingAnalyzer:
         return optimal
 
     def compute_correlation_feature_indices(self) -> np.ndarray:
-        """Compute feature indices based on correlation with sale price."""
+        """Rank features by absolute Pearson correlation with ``SalePrice``.
+
+        Computes the full correlation matrix for all numeric columns in
+        ``self.training_data`` and orders features by their correlation with
+        ``SalePrice`` (descending).  The resulting index array (with ``SalePrice``
+        prepended at position 0) is stored in ``self.feature_indices['corr']``
+        and ``self.feature_names['corr']``.
+
+        Returns:
+            A 1-D :class:`~numpy.ndarray` of integer column indices into
+            ``self.training_data``, ordered highest-to-lowest correlation with
+            ``SalePrice`` (``SalePrice`` itself at index 0).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> idx = analyzer.compute_correlation_feature_indices()
+            >>> analyzer.feature_names['corr'][0]
+            'SalePrice'
+        """
         num_cols = self.get_numeric_columns(self.training_data)
         corr_df = self.training_data.loc[:, num_cols].corr()
         sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
@@ -434,7 +883,22 @@ class HousingAnalyzer:
         return np.array(idx)
 
     def plot_multicollinearity(self, n_features: int = 20) -> None:
-        """Plot correlation heatmap for top features."""
+        """Plot a correlation heatmap for the top *n_features* numeric features.
+
+        Features are ranked by their correlation with ``SalePrice``.  The heatmap
+        uses the ``coolwarm`` palette and annotates each cell with the rounded
+        coefficient.  The figure is saved via :meth:`_save_plot`.
+
+        Args:
+            n_features: Number of top-correlated features to include in the
+                heatmap (default ``20``).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> analyzer.plot_multicollinearity(n_features=10)  # doctest: +SKIP
+        """
         num_cols = self.get_numeric_columns(self.training_data)
         corr_df = self.training_data.loc[:, num_cols].corr()
         sale_price_corr = corr_df['SalePrice'].drop('SalePrice').sort_values(
@@ -468,14 +932,42 @@ class HousingAnalyzer:
         on the test set, avoiding data leakage.
 
         Args:
-            data: Raw dataframe
-            feature_names: List of feature column names to select
-            fitted_scaler: Pre-fitted StandardScaler (None = training mode)
-            fitted_encoders: Pre-fitted LabelEncoder dict (None = training mode)
+            data: Raw DataFrame containing all feature and target columns.
+            feature_names: Ordered list of column names to keep (``SalePrice``
+                will be appended automatically if missing).  Columns not present
+                in *data* are silently ignored.
+            fitted_scaler: Pre-fitted :class:`~sklearn.preprocessing.StandardScaler`
+                for numeric columns.  Pass ``None`` to fit a new scaler on
+                *data* (training mode).
+            fitted_encoders: Dict of pre-fitted
+                :class:`~sklearn.preprocessing.LabelEncoder` instances keyed by
+                column name.  Pass ``None`` to fit new encoders (training mode).
 
         Returns:
-            Tuple of (X features, y target, scaler, encoders).
-            In test mode the returned scaler and encoders are None.
+            A four-element tuple ``(X, y, scaler, encoders)`` where:
+
+            - *X* is the processed feature :class:`~pandas.DataFrame`.
+            - *y* is the (optionally log-transformed) ``SalePrice``
+              :class:`~pandas.Series`.
+            - *scaler* is the fitted
+              :class:`~sklearn.preprocessing.StandardScaler` (``None`` in test
+              mode).
+            - *encoders* is the dict of fitted encoders (``None`` in test mode).
+
+        Raises:
+            KeyError: If ``SalePrice`` is absent from *data* after feature
+                selection.
+            ValueError: If *data* is empty after outlier removal.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.apply_feature_engineering()
+            >>> feats = ['Overall_Qual', 'Gr_Liv_Area', 'SalePrice']
+            >>> X, y, scaler, enc = analyzer.process_data_for_modeling(
+            ...     analyzer.training_data.copy(), feats)
+            >>> scaler is not None
+            True
         """
         data = self.remove_outliers(data, 'Gr_Liv_Area', self.OUTLIER_THRESHOLD)
         data = self.add_total_bathrooms(data)
@@ -525,11 +1017,34 @@ class HousingAnalyzer:
     def run_ols(
             self, X_train: pd.DataFrame, y_train: pd.Series,
             X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
-        """
-        Run Ordinary Least Squares regression.
+        """Fit an Ordinary Least Squares model and report performance metrics.
+
+        When ``LOG_TARGET`` is ``True`` the predictions and labels are
+        back-transformed via ``expm1`` before computing RMSE and R² so that
+        all reported metrics are in original dollar units.  Two diagnostic plots
+        (predicted vs. actual and residuals) are saved via :meth:`_save_plot`.
+
+        Args:
+            X_train: Scaled, encoded training feature matrix.
+            y_train: Training target vector (log-transformed when
+                ``LOG_TARGET`` is ``True``).
+            X_test: Scaled, encoded test feature matrix.
+            y_test: Test target vector (log-transformed when ``LOG_TARGET``
+                is ``True``).
 
         Returns:
-            Dictionary with training and test RMSE and R²
+            A dict with keys ``'train_rmse'``, ``'test_rmse'``,
+            ``'train_r2'``, and ``'test_r2'``, all in original dollar units.
+
+        Example:
+            >>> import pandas as pd, numpy as np
+            >>> X = pd.DataFrame({'a': np.random.randn(100)})
+            >>> y = pd.Series(np.random.randn(100))
+            >>> analyzer = HousingAnalyzer()
+            >>> analyzer.LOG_TARGET = False
+            >>> res = analyzer.run_ols(X, y, X, y)
+            >>> set(res.keys()) == {'train_rmse', 'test_rmse', 'train_r2', 'test_r2'}
+            True
         """
         model = lm.LinearRegression()
         model.fit(X_train, y_train)
@@ -598,11 +1113,34 @@ class HousingAnalyzer:
     def run_ridge(
             self, X_train: pd.DataFrame, y_train: pd.Series,
             X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, Any]:
-        """
-        Run Ridge regression with hyperparameter tuning.
-        
+        """Fit a Ridge regression model with two-stage hyperparameter search.
+
+        Runs a coarse ``GridSearchCV`` over eight candidate alpha values, then a
+        fine-grained search over 200 values in the ±20 % band around the best
+        coarse alpha.  Three diagnostic plots (predicted vs. actual, residuals,
+        top-10 feature coefficients) are saved via :meth:`_save_plot`.
+
+        Args:
+            X_train: Scaled, encoded training feature matrix.
+            y_train: Training target vector (log-transformed when
+                ``LOG_TARGET`` is ``True``).
+            X_test: Scaled, encoded test feature matrix.
+            y_test: Test target vector (log-transformed when ``LOG_TARGET``
+                is ``True``).
+
         Returns:
-            Dictionary with best alpha, training and test RMSE
+            A dict with keys ``'best_alpha'``, ``'train_rmse'``,
+            ``'test_rmse'``, ``'train_r2'``, and ``'test_r2'``.
+
+        Example:
+            >>> import pandas as pd, numpy as np
+            >>> X = pd.DataFrame({'a': np.random.randn(50), 'b': np.random.randn(50)})
+            >>> y = pd.Series(np.random.randn(50))
+            >>> analyzer = HousingAnalyzer()
+            >>> analyzer.LOG_TARGET = False
+            >>> res = analyzer.run_ridge(X, y, X, y)
+            >>> 'best_alpha' in res
+            True
         """
         # Initial grid search
         param_grid = {'alpha': [0.01, 0.1, 1., 5., 10., 25., 50., 100.]}
@@ -706,11 +1244,34 @@ class HousingAnalyzer:
     def run_lasso(
             self, X_train: pd.DataFrame, y_train: pd.Series,
             X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, Any]:
-        """
-        Run LASSO regression with hyperparameter tuning.
-        
+        """Fit a LASSO regression model with two-stage hyperparameter search.
+
+        Runs a coarse ``GridSearchCV`` over ten candidate alpha values, then a
+        fine-grained search over 1000 values in the ±20 % band around the best
+        coarse alpha.  Three diagnostic plots (predicted vs. actual, residuals,
+        top-10 feature coefficients) are saved via :meth:`_save_plot`.
+
+        Args:
+            X_train: Scaled, encoded training feature matrix.
+            y_train: Training target vector (log-transformed when
+                ``LOG_TARGET`` is ``True``).
+            X_test: Scaled, encoded test feature matrix.
+            y_test: Test target vector (log-transformed when ``LOG_TARGET``
+                is ``True``).
+
         Returns:
-            Dictionary with best alpha, training and test RMSE
+            A dict with keys ``'best_alpha'``, ``'train_rmse'``,
+            ``'test_rmse'``, ``'train_r2'``, and ``'test_r2'``.
+
+        Example:
+            >>> import pandas as pd, numpy as np
+            >>> X = pd.DataFrame({'a': np.random.randn(50), 'b': np.random.randn(50)})
+            >>> y = pd.Series(np.random.randn(50))
+            >>> analyzer = HousingAnalyzer()
+            >>> analyzer.LOG_TARGET = False
+            >>> res = analyzer.run_lasso(X, y, X, y)
+            >>> 'best_alpha' in res
+            True
         """
         # Initial grid search
         param_grid = {
@@ -814,15 +1375,37 @@ class HousingAnalyzer:
         }
 
     def run_all_models(self, method: str, num_features: int) -> Dict[str, Dict]:
-        """
-        Run all regression models (OLS, Ridge, LASSO) for a given feature selection method.
-        
+        """Train and evaluate OLS, Ridge, and LASSO on a selected feature subset.
+
+        Selects the top *num_features* features according to the pre-computed
+        importance ranking stored under *method*, re-processes both train and test
+        splits via :meth:`process_data_for_modeling` (fitting the scaler and
+        encoders on the training split only to avoid leakage), then runs all three
+        regression models.  A comparison summary table is printed to stdout.
+
         Args:
-            method: Feature selection method ('rf', 'gb', or 'corr')
-            num_features: Number of top features to use
-            
+            method: Feature selection method key — one of ``'rf'`` (Random
+                Forest), ``'gb'`` (Gradient Boosting), or ``'corr'``
+                (correlation-based).
+            num_features: Number of top-ranked features to use.
+
         Returns:
-            Dictionary with results from all models
+            A dict with keys ``'ols'``, ``'ridge'``, and ``'lasso'``, each
+            mapping to the result dict returned by the corresponding ``run_*``
+            method.
+
+        Raises:
+            ValueError: If *method* is not a key in ``self.feature_names``
+                (i.e., feature importance for that method has not been computed
+                yet).
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.run_eda(); analyzer.run_feature_analysis()
+            >>> results = analyzer.run_all_models('rf', num_features=13)
+            >>> set(results.keys()) == {'ols', 'ridge', 'lasso'}
+            True
         """
         if method not in self.feature_names:
             raise ValueError(
@@ -881,7 +1464,29 @@ class HousingAnalyzer:
     # ==================== Main Pipeline ====================
 
     def run_eda(self) -> None:
-        """Run complete EDA pipeline."""
+        """Execute the full Exploratory Data Analysis pipeline.
+
+        Runs the following steps in order, mutating ``self.training_data``:
+
+        1. :meth:`remove_high_na_columns` — drop sparse columns.
+        2. :meth:`analyze_sales_by_year` — bar chart of annual sales.
+        3. :meth:`analyze_living_area_vs_price` — joint plot.
+        4. :meth:`get_price_statistics` — print descriptive stats.
+        5. :meth:`plot_price_distribution` — histogram.
+        6. :meth:`remove_living_area_outliers` — drop extreme observations.
+        7. :meth:`plot_neighborhood_distribution` — bar chart by neighborhood.
+        8. :meth:`analyze_correlations` — correlation bar chart.
+        9. :meth:`plot_feature_vs_price` for ``Bedroom_AbvGr`` and
+           ``Overall_Qual``.
+
+        Note:
+            Must be called after :meth:`split_data`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data()
+            >>> analyzer.run_eda()  # doctest: +SKIP
+        """
         print("\n" + "=" * 60)
         print("EXPLORATORY DATA ANALYSIS")
         print("=" * 60 + "\n")
@@ -898,7 +1503,33 @@ class HousingAnalyzer:
         self.plot_feature_vs_price('Overall_Qual')
 
     def run_feature_analysis(self) -> None:
-        """Run complete feature importance analysis."""
+        """Execute the full feature-importance analysis pipeline.
+
+        Calls the following steps in order:
+
+        1. :meth:`apply_feature_engineering` — adds engineered columns and
+           label-encodes categoricals on ``self.training_data``.
+        2. :meth:`prepare_features_target` — splits into *X* and *y*.
+        3. Random Forest importance via :meth:`compute_feature_importance_rf`
+           followed by :meth:`find_optimal_features`.
+        4. Gradient Boosting importance via :meth:`compute_feature_importance_gb`
+           followed by :meth:`find_optimal_features`.
+        5. Correlation-based ranking via
+           :meth:`compute_correlation_feature_indices`.
+        6. Multicollinearity heatmap via :meth:`plot_multicollinearity`.
+
+        After this method completes, ``self.feature_indices``,
+        ``self.feature_names``, and ``self.optimal_features`` are all populated
+        and ready for use in :meth:`run_all_models`.
+
+        Note:
+            Must be called after :meth:`run_eda`.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> analyzer.load_data(); analyzer.split_data(); analyzer.run_eda()
+            >>> analyzer.run_feature_analysis()  # doctest: +SKIP
+        """
         print("\n" + "=" * 60)
         print("FEATURE IMPORTANCE ANALYSIS")
         print("=" * 60 + "\n")
@@ -920,8 +1551,29 @@ class HousingAnalyzer:
         self.compute_correlation_feature_indices()
         self.plot_multicollinearity()
 
-    def run_complete_analysis(self) -> None:
-        """Run the complete housing price analysis pipeline."""
+    def run_complete_analysis(self) -> Optional[Dict[str, Dict]]:
+        """Run the end-to-end Ames Housing analysis pipeline.
+
+        Executes all phases in order:
+
+        1. :meth:`load_data` and :meth:`split_data`.
+        2. :meth:`run_eda`.
+        3. :meth:`run_feature_analysis`.
+        4. :meth:`run_all_models` for each available feature selection method
+           (``'rf'``, ``'gb'``, ``'corr'``), using optimal feature counts where
+           available.
+
+        Returns:
+            A dict mapping each feature-selection method key (``'rf'``,
+            ``'gb'``, ``'corr'``) to its :meth:`run_all_models` result dict, or
+            ``None`` if no feature indices were computed.
+
+        Example:
+            >>> analyzer = HousingAnalyzer(data_path='ames.csv')
+            >>> results = analyzer.run_complete_analysis()  # doctest: +SKIP
+            >>> 'rf' in results
+            True
+        """
         print("=" * 60)
         print("AMES HOUSING PRICE ANALYSIS")
         print("=" * 60)
@@ -962,7 +1614,16 @@ class HousingAnalyzer:
 
 
 def main() -> None:
-    """Main entry point for the housing analysis."""
+    """CLI entry point: instantiate :class:`HousingAnalyzer` and run the full pipeline.
+
+    Calls :meth:`~HousingAnalyzer.run_complete_analysis` and re-raises any
+    exception after printing a human-readable message.
+
+    Example:
+        Run from the command line::
+
+            python housinganalysis.py
+    """
     analyzer = HousingAnalyzer()
 
     try:
